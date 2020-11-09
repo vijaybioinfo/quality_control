@@ -1,6 +1,6 @@
 ---
 project_name: all_fgal
-# it can even be a CSV file like the one in a Cell Ranger aggregation
+# path to the Cell Ranger ouput; it can even be a CSV file like the one in a Cell Ranger aggregation
 input_expression: ".data/aggregation.csv"
 # A table of the metadata per library, or the whole metadata ready
 # it can be multiple file
