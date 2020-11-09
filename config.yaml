@@ -1,0 +1,17 @@
+---
+project_name: all_fgal
+# it can even be a CSV file like the one in a Cell Ranger aggregation
+input_expression: "/home/ciro/fungal_allergy/info/tmp.csv"
+# A table of the metadata per library, or the whole metadata ready
+# it can be multiple file
+metadata: "/home/ciro/fungal_allergy/info/metadata_library.csv"
+# if you don't add "/" at the end, it will append 'project_name'
+output_dir: "/home/ciro/large/fungal_allergy/results/qc/"
+# A file will sufice; columns must be metrics names in the metadata
+filtering:
+  file: "./data/file.csv"
+  nFeature_RNA: [200, Inf, 1]
+  nCount_RNA: [-Inf, Inf, 1]
+  percent.mt: [-Inf, 40, 1]
+  subset: {column1: [value1, value2], column3: group2}
+...
