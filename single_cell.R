@@ -25,7 +25,7 @@ optlist <- list(
 optparse <- OptionParser(option_list = optlist)
 defargs <- parse_args(optparse)
 if(interactive()){ # Example/manually
-  defargs$yaml = "/home/ciro/scripts/clustering/qc.yaml"
+  defargs$yaml = "/home/ciro/scripts/quality_control/config.yaml"
 }
 config = read_yaml(defargs$yaml)
 str(config)
@@ -105,12 +105,11 @@ theme_set(theme_cowplot())
 
 #### Presenting Parameters ####-------------------------------------------------
 str(config)
-## Digesting some first
 cat('\n\n----------------------- Digesting parameters --------------------\n')
 mytab <- if(file.exists(config$filtering$file)){ # QC filters first
   readfile(config$filtering$file, stringsAsFactors = FALSE)
 }else{
-  tvar <- names(config$filtering)[!names(config$filtering) %in% c("file", "subset")]
+  tvar <- names(config$filtering)[!names(config$filtering) %in% c("file", "subset", "nSamples_expressed")]
   data.frame(sapply(config$filtering[names(config$filtering) %in% tvar], function(x) as.numeric(unlist(x)[1:3]) ))
 }
 mytab[is.na(mytab)] <- -1; # gets quantiles
@@ -123,6 +122,7 @@ apply_filter <- apply_filter > 0
 fix_boundary <- function(x, y, replacement){ x <- x[y]; x[is.na(x)] <- replacement; names(x) <- y; x }
 low.filt.cells <- fix_boundary(x = low.filt.cells, y = ivariables, -Inf)
 high.filt.cells <- fix_boundary(x = high.filt.cells, y = ivariables, Inf)
+config$filtering$nSamples_expressed <- if(is.null(config$filtering$nSamples_expressed)) 0.001 else config$filtering$nSamples_expressed[[1]]
 #### ########## ########## ####-------------------------------------------------
 
 #### Getting data ####----------------------------------------------------------
@@ -131,16 +131,16 @@ cat('======================= Expression matrix\n')
 # Find whatever you give, 10X directory (barcodes, gene_names, counts), Seurat object, CSV file, TXT, RDS
 is_vector_counts <- grepl("meco", config$project_name) | !dir.exists(config$input_expression)
 Sys.time()
-mycellsdata <- get_source_data(config$input_expression, pj = config$project_name, merge_counts = is_vector_counts, v = TRUE)
+expr_data <- get_source_data(config$input_expression, pj = config$project_name, merge_counts = is_vector_counts, v = TRUE)
 Sys.time()
-config$input_expression <- mycellsdata[[2]]
-if(length(mycellsdata) > 2) annottab <- mycellsdata[[3]]
-mycellsdata <- if(length(mycellsdata) > 1 && is.null(dim(mycellsdata[[1]]))){
+config$input_expression <- expr_data[[2]]
+if(length(expr_data) > 2) meta_data <- expr_data[[3]]
+expr_data <- if(length(expr_data) > 1 && is.null(dim(expr_data[[1]]))){
   cat("Keeping only expression data to store in another assay\n")
-  mycellsdata[[grep("expression", names(mycellsdata), ignore.case = TRUE)]]
-}else{ mycellsdata[[1]] }
-if(is.data.frame(mycellsdata)) mycellsdata <- Matrix(as.matrix(mycellsdata), sparse = TRUE)
-str(mycellsdata, max.level = 2); gc()
+  expr_data[[grep("expression", names(expr_data), ignore.case = TRUE)]]
+}else{ expr_data[[1]] }
+if(is.data.frame(expr_data)) expr_data <- Matrix(as.matrix(expr_data), sparse = TRUE)
+str(expr_data, max.level = 2); gc()
 cat('======================= Annotation/metadata\n')
 # This file must be a table with the following structure
 # Library, Condition_1, Condition_2, etc, or it can be the annotation/meta.data
@@ -152,27 +152,28 @@ grpsamples <- if(file.exists(config$metadata)){
 }
 if(any(grepl("cell_id", colnames(grpsamples)))) rownames(grpsamples) <- grpsamples$cell_id
 tvar <- apply(grpsamples, 2, function(x){ # find which column contains barcodes
-  if(any(x %in% colnames(mycellsdata))) TRUE else FALSE # then check if they're in the rownames
-}); tvar['rowname_barcode'] <- any(rownames(grpsamples) %in% colnames(mycellsdata))
+  if(any(x %in% colnames(expr_data))) TRUE else FALSE # then check if they're in the rownames
+}); tvar['rowname_barcode'] <- any(rownames(grpsamples) %in% colnames(expr_data))
 if(isTRUE(tvar['rowname_barcode'])) cat("Sample names in rows\n")
 if(any(tvar)){ # check if any of the columns in the table has the cell names (barcodes)
   cat('- provided from file\n');
-  annottab <- grpsamples; rm(grpsamples) # this could mean that it's the annotation itself!
+  meta_data <- grpsamples; rm(grpsamples) # this could mean that it's the annotation itself!
   # if the barcodes are not in the rownames, then find the column with them
-  if(!tvar['rowname_barcode']) rownames(annottab) <- annottab[, head(names(tvar[tvar]), 1)]
-}else if(exists('annottab')){
+  if(!tvar['rowname_barcode']) rownames(meta_data) <- meta_data[, head(names(tvar[tvar]), 1)]
+}else if(exists('meta_data')){
   cat('- given in expression input\n');
-  print(str(annottab))
+  print(str(meta_data))
 }
-if(!exists('annottab')){
+
+if(!exists('meta_data')){
   cat('- building table...\n');
-  annottab <- data.frame(row.names = colnames(mycellsdata), stringsAsFactors = FALSE, check.names = FALSE)
-  if(grepl('-', colnames(mycellsdata)[1])){ # You do need to find aggregation_csv to know the order of the libraries
+  meta_data <- data.frame(row.names = colnames(expr_data), stringsAsFactors = FALSE, check.names = FALSE)
+  if(grepl('-', colnames(expr_data)[1])){ # You do need to find aggregation_csv to know the order of the libraries
     # You do need to find aggregation_csv to know the order of the libraries
     aggname <- if(!dir.exists(config$input_expression)) basename(config$input_expression) else 'aggregation*.csv'
     input_tab <- if(!dir.exists(config$input_expression)) dirname(config$input_expression) else config$input_expression
     aggregated <- findfile(name = aggname, path = input_tab, read = TRUE, v = TRUE, stringsAsFactors = FALSE)
-    cell_gem <- sub('.*\\-', '', colnames(mycellsdata), perl = TRUE) # getting cells GEM
+    cell_gem <- sub('.*\\-', '', colnames(expr_data), perl = TRUE) # getting cells GEM
     cell_lib <- rownames(aggregated); names(cell_lib) <- aggregated[, 1] # and vector named as the library name
     cat('**\nAssigning names per library:\n', show_commas(cell_lib), '\n', show_commas(names(cell_lib)), '\n***\n')
 
@@ -199,17 +200,17 @@ if(!exists('annottab')){
     cat("Traking variables:", show_commas(names(track_names)), "\n")
     colnames(group_names)[track_names] <- paste0('orig.', colnames(group_names)[track_names])
     colnames(group_names) <- make.names(casefold(colnames(group_names)))
-    annottab <- remove.factors(cbind(annottab, origlib = cell_lib[cell_gem], group_names[cell_gem, , drop = FALSE]))
+    meta_data <- remove.factors(cbind(meta_data, origlib = cell_lib[cell_gem], group_names[cell_gem, , drop = FALSE]))
     write.csv(grpsamples, file = paste0(zetinfo, 'groups.csv'), row.names = FALSE)
   }else if(length(nrow(grpsamples))){
-    cat('No pattern in cell names:', show_commas(colnames(mycellsdata)), '\n')
+    cat('No pattern in cell names:', show_commas(colnames(expr_data)), '\n')
     if(grpsamples[1, 1] != "void")
       cat('Library names:', show_commas(grpsamples[, ifelse(is.null(ncol(grpsamples)), 1, 2)]), '\n')
-    annottab$origlib <- rep('L1', ncol(mycellsdata))
+    meta_data$origlib <- rep('L1', ncol(expr_data))
   }
 };
 
-annottab <- remove.factors(annottab)
+meta_data <- remove.factors(meta_data)
 addmetadataf <- unlist(strsplit(path.expand(addmetadataf), "~"))
 tvar <- file.exists(addmetadataf)
 str(addmetadataf)
@@ -218,59 +219,57 @@ if(any(tvar)){
   cat("Adding metadata from:", addmetadataf, sep = "\n")
   for(addmetadataf_i in addmetadataf){
     addannot <- remove.factors(readfile(addmetadataf_i))
-    print(dim(annottab))
+    print(dim(meta_data))
     # partial matching problem addressed in /home/ciro/covid19/scripts/partial_matching.R
-    annottab <- joindf(x = annottab, y = addannot)
+    meta_data <- joindf(x = meta_data, y = addannot)
   }
-  print(dim(annottab))
-}; fname <- paste0(zetinfo, 'metadata.rdata'); if(!file.exists(fname)) save(annottab, file = fname)
+  print(dim(meta_data))
+}; fname <- paste0(zetinfo, 'metadata.rdata'); if(!file.exists(fname)) save(meta_data, file = fname)
 #### ####### #### ####----------------------------------------------------------
 
 #### Initial Filtering ####-----------------------------------------------------
 filtereddata <- filters_complex(
-  mdata = annottab,
+  mdata = meta_data,
   filters = lapply(names(config$filtering$subset), function(x) c(x, config$filtering$subset[[x]]) ),
   v = TRUE
 )
-annottab <- filtereddata[[1]]; rm(filtereddata)
+meta_data <- filtereddata[[1]]; rm(filtereddata)
 
 ### Minimal filter: cells and genes ###
-mincs = ceiling(0.001 * ncol(mycellsdata))
+nSamples_min = ceiling(config$filtering$nSamples_expressed * ncol(expr_data))
 tvar <- which(ivariables == 'nFeature_RNA')
-mings = ifelse(isTRUE(low.filt.cells[tvar] > 0), low.filt.cells[tvar], 200)
+nFeature_min = ifelse(isTRUE(low.filt.cells[tvar] > 0), low.filt.cells[tvar], 200)
 cat("Calculating number of expressed features and expressing samples.\n")
 # Slow and will probably be re-calculated
-efeatures <- Matrix::colSums(mycellsdata > 0); esamples <- Matrix::rowSums(mycellsdata > 0)
-# head(reshape2::melt(sort(efeatures[efeatures > 0])))
-# head(reshape2::melt(sort(esamples[esamples > 0])))
-summary(efeatures); summary(esamples)
-# mycellsdata <- mycellsdata[esamples >= mincs, efeatures >= mings]
-cat('Minimal filtering: ~0.1% of the data min.cells >=', mincs, '& min.genes (not applied) >=', mings,'\n')
-cat("Keeping genes:", sum(esamples >= mincs), "/", length(esamples) , "\n")
-mycellsdata <- mycellsdata[esamples >= mincs, ]
+nSamples_expressed <- Matrix::rowSums(expr_data > 0); summary(nSamples_expressed)
+# efeatures <- Matrix::colSums(expr_data > 0); summary(efeatures)
+# expr_data <- expr_data[nSamples_expressed >= nSamples_min, efeatures >= nFeature_min]
+cat('Minimal filtering: ~0.1% of the data min.cells >=', nSamples_min, '& min.genes (not applied) >=', nFeature_min,'\n')
+cat("Keeping genes:", sum(nSamples_expressed >= nSamples_min), "/", length(nSamples_expressed) , "\n")
+expr_data <- expr_data[nSamples_expressed >= nSamples_min, ]
 ### ####### ####### ##### ### ##### ##
 
-cellsf <- show_found(colnames(mycellsdata), rownames(annottab), element = 'samples/cells', v = TRUE)
-annottab <- annottab[cellsf, , drop = FALSE]
-mycellsdata <- mycellsdata[, cellsf]
+cellsf <- show_found(colnames(expr_data), rownames(meta_data), element = 'samples/cells', v = TRUE)
+meta_data <- meta_data[cellsf, , drop = FALSE]
+expr_data <- expr_data[, cellsf]
 
-if("orig.ident" %in% colnames(annottab)){ # if the meta data comes from a Seurat object, check if it has cluster columns
+if("orig.ident" %in% colnames(meta_data)){ # if the meta data comes from a Seurat object, check if it has cluster columns
   cat("Preserve previous analyses clusters\n")
-  for(orig in grepatrn(colnames(annottab), accept = '^res|.*_snn_res')){
+  for(orig in grepatrn(colnames(meta_data), accept = '^res|.*_snn_res')){
     # pastes previous project name and its clusters
-    annottab[, orig] <- paste0(annottab[, "orig.ident"], "_", annottab[, orig])
+    meta_data[, orig] <- paste0(meta_data[, "orig.ident"], "_", meta_data[, orig])
   }
-}; colnames(annottab) <- casefold(make.names(sub('^res|.*_snn_res', 'orig', colnames(annottab)), unique = TRUE))
-tvar <- grep(pattern = "orig.ident|seurat_clusters", x = colnames(annottab), value = TRUE, invert = TRUE)
-cat("Keeping", length(tvar), "of", ncol(annottab), "columns\n")
-annottab <- remove.factors(annottab[, tvar, drop = FALSE])
+}; colnames(meta_data) <- casefold(make.names(sub('^res|.*_snn_res', 'orig', colnames(meta_data)), unique = TRUE))
+tvar <- grep(pattern = "orig.ident|seurat_clusters", x = colnames(meta_data), value = TRUE, invert = TRUE)
+cat("Keeping", length(tvar), "of", ncol(meta_data), "columns\n")
+meta_data <- remove.factors(meta_data[, tvar, drop = FALSE])
 #### ####### ######### ####-----------------------------------------------------
 
 #### Adding variables of interest ####------------------------------------------
 cat("\n\nAdding QC metrics from features (percentages of counts)\n")
-annottab <- add_pcts(
-  mdata = annottab,
-  edata = mycellsdata,
+meta_data <- add_pcts(
+  mdata = meta_data,
+  edata = expr_data,
   feature_pattern = list(
     percent.mt = c('^mt-', '^m-', '^hg19_mt-', '^mm10_mt-'),
     percent.ribo = paste0(c('^rps', '^rpl'), "[0-9]"),
@@ -278,22 +277,22 @@ annottab <- add_pcts(
   ),
   v = TRUE
 )
-annottab$nFeature_RNA <- Matrix::colSums(mycellsdata[, rownames(annottab)] > 0)
-annottab$nCount_RNA <- Matrix::colSums(mycellsdata[, rownames(annottab)])
-annottab$Data = casefold(x = config$project_name, upper = TRUE)
+meta_data$nFeature_RNA <- Matrix::colSums(expr_data[, rownames(meta_data)] > 0)
+meta_data$nCount_RNA <- Matrix::colSums(expr_data[, rownames(meta_data)])
+meta_data$Data = casefold(x = config$project_name, upper = TRUE)
 #### ###### ######### ## ######## ####------------------------------------------
 if(1){
-  cat("Presenting data:\nAnnotation:\n"); str(annottab[, headtail(1:ncol(annottab), 5)])
-  cat("Matrix:"); str(mycellsdata)
-  cat("Aprox. expression range"); print(summary(as.matrix(mycellsdata[, sample(1:ncol(mycellsdata), 4)])))
-}; fname <- paste0(zetinfo, 'metadata_prefilter.rdata'); save(annottab, file = fname)
+  cat("Presenting data:\nAnnotation:\n"); str(meta_data[, headtail(1:ncol(meta_data), 5)])
+  cat("Matrix:"); str(expr_data)
+  cat("Aprox. expression range"); print(summary(as.matrix(expr_data[, sample(1:ncol(expr_data), 4)])))
+}; fname <- paste0(zetinfo, 'metadata_prefilter.rdata'); save(meta_data, file = fname)
 
 #### Filtering variables ####---------------------------------------------------
 cat('\n\nDistribution of filtering criteria\n')
-annottab[, ivariables] <- apply(annottab[, ivariables, drop = FALSE], 2, function(x){
+meta_data[, ivariables] <- apply(meta_data[, ivariables, drop = FALSE], 2, function(x){
   y <- x; y[is.na(y)] <- Inf; return(y); #any(is.na(x))
 })
-summ <- sapply(annottab[, ivariables, drop = FALSE], function(x){
+summ <- sapply(meta_data[, ivariables, drop = FALSE], function(x){
   c(rev(summary(x)),
     quantile(x[!is.na(x)], prob = c(.001, 0.992)))
 })
@@ -306,7 +305,7 @@ summ <- rbind(summ[7:8, ], tvar) # change infinites for boundaries and merge qua
 head(summ)
 
 tvar <- sapply(1:length(ivariables), function(x){ # checking for metric unique values
-  length(table(annottab[, ivariables[x]])) < 3
+  length(table(meta_data[, ivariables[x]])) < 3
 }); cat("Removing parameters with constant value accrosss cells:", sum(tvar), "\n")
 low.filt.cells <- low.filt.cells[!tvar]; high.filt.cells <- high.filt.cells[!tvar]
 names(low.filt.cells) <- names(high.filt.cells) <- ivariables <- ivariables[!tvar]
@@ -327,8 +326,8 @@ fname <- paste0(zetinfo, 'filters_table.csv'); if(!file.exists(fname)) write.csv
 print(filtersdf)
 
 cat("\n\nGroups found in data:\n")
-orignames <- grep(pattern = "orig", x = colnames(annottab), value = TRUE)
-tvar <- lapply(annottab[, orignames], table, useNA = 'always')
+orignames <- grep(pattern = "orig", x = colnames(meta_data), value = TRUE)
+tvar <- lapply(meta_data[, orignames], table, useNA = 'always')
 print(tvar); orignames <- orignames[sapply(tvar, length) > 1]
 
 ### Classifying cell quality ###------------------------------------------------
@@ -337,70 +336,70 @@ cat("--- Zhang Lab; Guo et al 2018\n") # they removed ribosomal reads before map
 class_params <- c('nFeature_RNA', 'nCount_RNA', 'percent.mt')
 tvar <- t(sapply(class_params, function(x){
   if(x == "percent.mt") return(c(-Inf, 10))
-  y <- (3 * mad(annottab[, x], constant = 1, low = TRUE))
-  c(median(annottab[, x]) - y, median(annottab[, x]) + y)
+  y <- (3 * mad(meta_data[, x], constant = 1, low = TRUE))
+  c(median(meta_data[, x]) - y, median(meta_data[, x]) + y)
 }))# average count > 1
-annottab$orig.qc_tag_guo <- "Good"
+meta_data$orig.qc_tag_guo <- "Good"
 for(i in 1:nrow(tvar)){
-  annottab$orig.qc_tag_guo[annottab[, names(tvar[i, 2])] > tvar[i, 2]] <- "Bad"
-  annottab$orig.qc_tag_guo[annottab[, names(tvar[i, 1])] < tvar[i, 1]] <- "Bad"
-}; table(annottab$orig.qc_tag_guo)
-annottab$orig.qc_tag <- "ALL"
+  meta_data$orig.qc_tag_guo[meta_data[, names(tvar[i, 2])] > tvar[i, 2]] <- "Bad"
+  meta_data$orig.qc_tag_guo[meta_data[, names(tvar[i, 1])] < tvar[i, 1]] <- "Bad"
+}; table(meta_data$orig.qc_tag_guo)
+meta_data$orig.qc_tag <- "ALL"
 
 ## Classification — Greg's
-# filtered_reads became final_STAR_counts
+# filtered_reads became final_STAR_countsCreateSeuratObject(counts = pbmc.data, project = "pbmc3k", min.cells = 3, min.features = 200)
 class_params <- c('Total_genes', 'final_STAR_counts', 'uniquely_mapped_reads_perc', 'bias_5to3_prim', 'percent.mt')
 plate_name = "orig.Plate"
-if(all(class_params %in% colnames(annottab))){
+if(all(class_params %in% colnames(meta_data))){
   cat("--- Vijay Lab: Smart-Seq2\n")
-  annottab$orig.qc_tag <- "Manual"
-  annottab$orig.qc_tag[annottab$Total_genes < 200 & annottab$final_STAR_counts >= 50000] <- "1.Bad"
-  reseq_def <- sapply(unique(annottab$orig.Plate), function(x){
-    y <- annottab[annottab[, plate_name] == x, ]
+  meta_data$orig.qc_tag <- "Manual"
+  meta_data$orig.qc_tag[meta_data$Total_genes < 200 & meta_data$final_STAR_counts >= 50000] <- "1.Bad"
+  reseq_def <- sapply(unique(meta_data$orig.Plate), function(x){
+    y <- meta_data[meta_data[, plate_name] == x, ]
     tvar <- y$Total_genes < 200 & y$final_STAR_counts < 50000 & y$uniquely_mapped_reads_perc >= 60
     (sum(tvar) / nrow(y) * 100)
   })
-  annottab$reseq_def <- reseq_def[annottab[, plate_name]]
-  annottab$orig.qc_tag[annottab$reseq_def >= 20] <- "Reseq_plate"
-  annottab$orig.qc_tag[annottab$reseq_def < 20] <- "2.Bad"
-  tvar <- annottab$Total_genes >= 200 & annottab$final_STAR_counts >= 50000 & annottab$bias_5to3_prim <= 2
-  tvar <- tvar & annottab$percent.mt <= 20 & annottab$uniquely_mapped_reads_perc >= 60
-  annottab$orig.qc_tag[tvar] <- "Good"
-  annottab = annottab[, !colnames(annottab) %in% c('reseq_def')]
-  print(table(annottab$orig.qc_tag))
-  table(annottab$orig.qc_tag, annottab$orig.qc_tag_guo)
-}; fname <- paste0(zetinfo, 'metadata_prefilter.rdata'); save(annottab, file = fname)
+  meta_data$reseq_def <- reseq_def[meta_data[, plate_name]]
+  meta_data$orig.qc_tag[meta_data$reseq_def >= 20] <- "Reseq_plate"
+  meta_data$orig.qc_tag[meta_data$reseq_def < 20] <- "2.Bad"
+  tvar <- meta_data$Total_genes >= 200 & meta_data$final_STAR_counts >= 50000 & meta_data$bias_5to3_prim <= 2
+  tvar <- tvar & meta_data$percent.mt <= 20 & meta_data$uniquely_mapped_reads_perc >= 60
+  meta_data$orig.qc_tag[tvar] <- "Good"
+  meta_data = meta_data[, !colnames(meta_data) %in% c('reseq_def')]
+  print(table(meta_data$orig.qc_tag))
+  table(meta_data$orig.qc_tag, meta_data$orig.qc_tag_guo)
+}; fname <- paste0(zetinfo, 'metadata_prefilter.rdata'); save(meta_data, file = fname)
 ### ########### #### ####### ###------------------------------------------------
 
 # #### Qlucore file ####----------------------------------------------------------
 # cat("\n\n----- Qlucore input -------\n")
-# passed <- if(is.null(annottab$orig.qc_tag)){
-#   rownames(annottab)
+# passed <- if(is.null(meta_data$orig.qc_tag)){
+#   rownames(meta_data)
 # }else{
 #   cat("Using only the 'good' ones.\n")
-#   rownames(annottab[annottab$orig.qc_tag == "Good", ])
+#   rownames(meta_data[meta_data$orig.qc_tag == "Good", ])
 # }
 # tvar <- gsub("raw\\.", "TPM\\.", config$input_expression)
 # tvar <- if(!file.exists(tvar)) gsub("_raw", "_TPM", config$input_expression) else tvar
 # suffixtag = "_counts"
-# mycellsdata_t <- if(file.exists(tvar) && grepl("raw|TPM", tvar, ignore.case = TRUE)){ # DATA DUPLICATION
+# expr_data_t <- if(file.exists(tvar) && grepl("raw|TPM", tvar, ignore.case = TRUE)){ # DATA DUPLICATION
 #   suffixtag = "_TPM"
-#   mycellsdata_t <- readfile(tvar)
-# }else{ mycellsdata }
+#   expr_data_t <- readfile(tvar)
+# }else{ expr_data }
 # source("https://raw.githubusercontent.com/vijaybioinfo/handy_functions/master/R/qlucore_file.R")
 # for(thresh in c(0, 5)){
-#   gmeans <- sort(Matrix::rowMeans(mycellsdata_t[, passed]), decreasing = TRUE)
-#   genes <- rownames(mycellsdata_t[names(gmeans[gmeans > thresh]), ])
-#   cat(length(genes), "of", nrow(mycellsdata_t), 'features\n')
-#   mysamples <- sample_grp(annot = annottab, cname = 'Data', maxln = '5000')
-#   cat(length(mysamples), "of", ncol(mycellsdata_t), 'samples\n')
+#   gmeans <- sort(Matrix::rowMeans(expr_data_t[, passed]), decreasing = TRUE)
+#   genes <- rownames(expr_data_t[names(gmeans[gmeans > thresh]), ])
+#   cat(length(genes), "of", nrow(expr_data_t), 'features\n')
+#   mysamples <- sample_grp(annot = meta_data, cname = 'Data', maxln = '5000')
+#   cat(length(mysamples), "of", ncol(expr_data_t), 'samples\n')
 #   suffix <- paste0(zetinfo, "qlucore", if(is.numeric(thresh)) paste0("_gt", thresh, "mean_") else paste0("_", thresh, "_"))
-#   suffix <- paste0(suffix, length(genes), "genes", nrow(annottab), "samples")
+#   suffix <- paste0(suffix, length(genes), "genes", nrow(meta_data), "samples")
 #   suffix <- paste0(suffix, suffixtag, ".txt")
 #   nameout <- paste0(suffix)
 #   cat("Qlucore file:", nameout, "\n")
 #   if(!file.exists(nameout)){
-#     qf <- qlucore_format(mat = mycellsdata_t, metadata = annottab, rnames = genes, cnames = , v = TRUE)
+#     qf <- qlucore_format(mat = expr_data_t, metadata = meta_data, rnames = genes, cnames = , v = TRUE)
 #     write.table(qf, file = nameout, sep = "\t", quote = FALSE, row.names = FALSE)
 #   }else{
 #     cat("Exists\n")
@@ -410,13 +409,13 @@ if(all(class_params %in% colnames(annottab))){
 
 # visualisation ####------------------------------------------------------------
 cat("Scatter filters\n")
-qc_scatters(dat = annottab, thresholds = summ[, apply_filter], prefix = "0_qc")
+qc_scatters(dat = meta_data, thresholds = summ[, apply_filter], prefix = "0_qc")
 
-if(!exists('annottabbk')) annottabbk <- annottab
+if(!exists('meta_databk')) meta_databk <- meta_data
 vlns <- lapply(ivariables, function(x){
-  qc_violin(mydat = annottab, xax = "orig.qc_tag", yax = x, lb_filt = low.filt.cells, hb_filt = high.filt.cells, filtby = apply_filter)
+  qc_violin(mydat = meta_data, xax = "orig.qc_tag", yax = x, lb_filt = low.filt.cells, hb_filt = high.filt.cells, filtby = apply_filter)
 })
-is_simple <- length(table(annottab$orig.qc_tag)) < 3 & length(vlns) < 4
+is_simple <- length(table(meta_data$orig.qc_tag)) < 3 & length(vlns) < 4
 mygrid <- make_grid(length(ivariables), ncol = if(is_simple) 3)
 pdf(paste0('0_qc_all_qc_tag.pdf'), width = 5.5 * mygrid[2], height = 5 * mygrid[1])
 print(cowplot::plot_grid(plotlist = vlns, ncol = mygrid[2]))
@@ -425,9 +424,9 @@ graphics.off()
 for(prefix in c("1_qc", "2_filtered")){
   cat("=======================", prefix, "\n")
   vlns <- lapply(ivariables, function(x){
-    qc_violin(mydat = annottab, yax = x, lb_filt = low.filt.cells, hb_filt = high.filt.cells, filtby = apply_filter)
+    qc_violin(mydat = meta_data, yax = x, lb_filt = low.filt.cells, hb_filt = high.filt.cells, filtby = apply_filter)
   })
-  is_simple <- length(table(annottab$orig.qc_tag)) < 3 & length(vlns) < 4
+  is_simple <- length(table(meta_data$orig.qc_tag)) < 3 & length(vlns) < 4
   mygrid <- make_grid(length(ivariables), ncol = if(is_simple) 3)
   pdf(paste0(prefix, '_all_data.pdf'), width = 5.5 * mygrid[2], height = 5 * mygrid[1])
   print(cowplot::plot_grid(plotlist = vlns, ncol = mygrid[2]))
@@ -439,14 +438,14 @@ for(prefix in c("1_qc", "2_filtered")){
       fname <- paste0(prefix, '_all_data_confounder', sub("orig", "", origs), '.pdf')
       void <- lapply(ivariables, function(x){
         qc_violin(
-          mydat = annottab, xax = origs, yax = x,
+          mydat = meta_data, xax = origs, yax = x,
           lb_filt = low.filt.cells,
           hb_filt = high.filt.cells,
           filtby = apply_filter
         )
-      }); sfact <- if(length(table(annottab[, origs])) < 10) 5.5 else 3
+      }); sfact <- if(length(table(meta_data[, origs])) < 10) 5.5 else 3
       pdf(fname, width = sfact * mygrid[2], height = sfact * mygrid[1])
-      if(length(table(annottab[, origs])) < 10){
+      if(length(table(meta_data[, origs])) < 10){
         print(cowplot::plot_grid(plotlist = void, ncol = mygrid[2]))
       }else{
         tvar <- lapply(void, print)
@@ -461,35 +460,35 @@ for(prefix in c("1_qc", "2_filtered")){
       paste(ivariables[apply_filter], "<=", high.filt.cells[apply_filter], collapse = " & "),
     sep = " & ")
     cat("Criteria:", tvar, "\n")
-    sset <- paste0("annottab <- subset(x = annottab, subset = ", tvar, ")") # << choose wisely
+    sset <- paste0("meta_data <- subset(x = meta_data, subset = ", tvar, ")") # << choose wisely
     if(!all(is.infinite(c(high.filt.cells[apply_filter], low.filt.cells[apply_filter])))){
-      cat('- Before:', nrow(annottabbk), '\n')
+      cat('- Before:', nrow(meta_databk), '\n')
       eval(expr = parse(text = sset))
-      cat('- After:', nrow(annottab), '\n')
-    }; if(nrow(annottabbk) == nrow(annottab)) break
+      cat('- After:', nrow(meta_data), '\n')
+    }; if(nrow(meta_databk) == nrow(meta_data)) break
     cat("------------- Per quality plots\n")
-    if(is.null(annottabbk$orig.qc_tag)){
-      annottabbk$orig.qc_tag <- "Good"
-      annottabbk[!rownames(annottabbk) %in% rownames(annottab), ]$orig.qc_tag <- "bad"
+    if(is.null(meta_databk$orig.qc_tag)){
+      meta_databk$orig.qc_tag <- "Good"
+      meta_databk[!rownames(meta_databk) %in% rownames(meta_data), ]$orig.qc_tag <- "bad"
     }
-    tvar <- unique(annottabbk$orig.qc_tag); tvar <- tvar[tvar != "Good"]; if(length(tvar) == 0) next
+    tvar <- unique(meta_databk$orig.qc_tag); tvar <- tvar[tvar != "Good"]; if(length(tvar) == 0) next
     for(qc_tag in tvar){
-      annottab_ss <- annottabbk[annottabbk$orig.qc_tag == qc_tag, ]
-      orignamesp <- if(plate_name %in% colnames(annottab_ss)) plate_name else "origlib"
+      meta_data_ss <- meta_databk[meta_databk$orig.qc_tag == qc_tag, ]
+      orignamesp <- if(plate_name %in% colnames(meta_data_ss)) plate_name else "origlib"
       if(length(orignamesp) > 0){
         for(origs in orignamesp){
           cat(".")
           fname <- paste0(prefix, '_all_data_confounders_', qc_tag, sub("orig", "", origs), '.pdf')
           void <- lapply(ivariables, function(x){
             qc_violin(
-              mydat = annottab_ss, xax = origs, yax = x,
+              mydat = meta_data_ss, xax = origs, yax = x,
               lb_filt = low.filt.cells,
               hb_filt = high.filt.cells,
               filtby = apply_filter
             )
-          }); sfact <- if(length(table(annottab_ss[, origs])) < 10) 5.5 else 3
+          }); sfact <- if(length(table(meta_data_ss[, origs])) < 10) 5.5 else 3
           pdf(fname, width = sfact * mygrid[2], height = sfact * mygrid[1])
-          if(length(table(annottab_ss[, origs])) < 10){
+          if(length(table(meta_data_ss[, origs])) < 10){
             print(cowplot::plot_grid(plotlist = void, ncol = mygrid[2]))
           }else{
             tvar <- lapply(void, print)
@@ -499,11 +498,11 @@ for(prefix in c("1_qc", "2_filtered")){
     }
   } # Finish filtering
 }
-qc_scatters(dat = annottab, thresholds = summ[, apply_filter], prefix = "3_qc")
+qc_scatters(dat = meta_data, thresholds = summ[, apply_filter], prefix = "3_qc")
 # ############# ####------------------------------------------------------------
 
-save(annottab, file = "metadata_filtered.rdata")
-write.table(rownames(mycellsdata), file = "feature_names.txt", quote = FALSE, row.names = FALSE, col.names = FALSE);
+save(meta_data, file = "metadata_filtered.rdata")
+write.table(rownames(expr_data), file = "feature_names.txt", quote = FALSE, row.names = FALSE, col.names = FALSE);
 #### ######### ######### ####---------------------------------------------------
 
 cat('\nDONE\nStarting time:\n', st.time, '\n')
