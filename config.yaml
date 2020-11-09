@@ -16,5 +16,5 @@ filtering:
   nCount_RNA: [-Inf, Inf, 1]
   percent.mt: [-Inf, 40, 1]
   subset: {column1: [value1, value2], column3: group2}
-  nSamples_expressed: 0.001
+  nSamples_expressed: 0.001 # % of cells in which that gene is present
 ...
