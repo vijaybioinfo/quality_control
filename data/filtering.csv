@@ -1,0 +1,4 @@
+metric,nFeature_RNA,nCount_RNA,percent.mt,percent.rp
+lower,300,500,-Inf,-Inf
+upper,15000,6000,15,60
+filter,1,1,1,0
