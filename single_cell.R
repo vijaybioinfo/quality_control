@@ -25,21 +25,20 @@ optlist <- list(
 optparse <- OptionParser(option_list = optlist)
 defargs <- parse_args(optparse)
 if(interactive()){ # Example/manually
-  defargs$yaml = "/home/ciro/scripts/quality_control/config.yaml"
+  defargs$yaml = "/home/ciro/fungal_allergy/scripts/qc_config.yaml"
 }
 config = read_yaml(defargs$yaml)
 str(config)
-options(warnings = FALSE)
-options(warning = FALSE)
+options(warn = -1)
 
 #### Functions ####-------------------------------------------------------------
 cat("Loading functions\n")
 resources = c(
   "https://raw.githubusercontent.com/vijaybioinfo/handy_functions/master/devel/utilities.R", # dircheck show_parameters newlines
   "https://raw.githubusercontent.com/vijaybioinfo/handy_functions/master/devel/file_reading.R", # readfile
-  "/home/ciro/scripts/clustering/utilities.R", # get_source_data add_pcts
+  "/home/ciro/scripts/clustering/R/utilities.R", # get_source_data add_pcts filters_qc_limits
   "https://raw.githubusercontent.com/vijaybioinfo/handy_functions/master/devel/filters.R", # filters_complex
-  "/home/ciro/scripts/clustering/plotting.R", # feature_scatter qc_violin
+  "/home/ciro/scripts/clustering/R/plotting.R", # feature_scatter qc_violin
   "https://raw.githubusercontent.com/vijaybioinfo/handy_functions/master/devel/plots.R", # make_grid
   # Soon to be changed # ---
   "https://raw.githubusercontent.com/vijaybioinfo/handy_functions/master/devel/plotting_dismantle.R" # plot_corr simple_violin
@@ -77,7 +76,7 @@ qc_scatters <- function(
   }
 }
 #### ######### ####-------------------------------------------------------------
-output_dir <- dircheck(paste0(dircheck(config$output_dir), config$project_name, "/"))
+output_dir <- paste0(sub("\\/$", "", config$output_dir), "/", config$project_name, "/")
 setwd(output_dir)
 
 #### Directories structure ####-------------------------------------------------
@@ -105,22 +104,7 @@ theme_set(theme_cowplot())
 #### Presenting Parameters ####-------------------------------------------------
 str(config)
 cat('\n\n----------------------- Digesting parameters --------------------\n')
-mytab <- if(file.exists(config$filtering$file)){ # QC filters first
-  readfile(config$filtering$file, stringsAsFactors = FALSE, row.names = 1)
-}else{
-  tvar <- names(config$filtering)[!names(config$filtering) %in% c("file", "subset", "nSamples_expressed")]
-  data.frame(sapply(config$filtering[names(config$filtering) %in% tvar], function(x) as.numeric(unlist(x)[1:3]) ))
-}
-mytab[is.na(mytab)] <- -1; # gets quantiles
-ivariables <- colnames(mytab)
-low.filt.cells <- unlist(mytab[1, ]); high.filt.cells <- unlist(mytab[2, ])
-apply_filter <- unlist(mytab[3, ])
-# apply all of them by default; except when some of them are specified
-apply_filter[is.na(apply_filter)] <- ifelse(all(is.na(apply_filter)), 1, 0)
-apply_filter <- apply_filter > 0
-fix_boundary <- function(x, y, replacement){ x <- x[y]; x[is.na(x)] <- replacement; names(x) <- y; x }
-low.filt.cells <- fix_boundary(x = low.filt.cells, y = ivariables, -Inf)
-high.filt.cells <- fix_boundary(x = high.filt.cells, y = ivariables, Inf)
+qc_filters <- filters_qc_limits(f = config$filtering)
 config$filtering$nSamples_expressed <- if(is.null(config$filtering$nSamples_expressed)) 0.001 else config$filtering$nSamples_expressed[[1]]
 #### ########## ########## ####-------------------------------------------------
 
@@ -132,7 +116,7 @@ expr_data <- get_source_data(
   xpath = config$input_expression,
   pj = config$project_name,
   metadata = config$metadata[1],
-  merge_counts = grepl("meco|merge", config$project_name) | !dir.exists(config$input_expression),
+  merge_counts = grepl("meco|merge", config$project_name) || !dir.exists(config$input_expression),
   verbose = defargs$verbose
 )
 Sys.time()
@@ -167,18 +151,19 @@ meta_data <- filtereddata[[1]]; rm(filtereddata)
 
 ### Minimal filter: cells and genes ###
 nSamples_min = ceiling(config$filtering$nSamples_expressed * ncol(expr_data))
-tvar <- which(ivariables == 'nFeature_RNA')
-nFeature_min = 0 #ifelse(isTRUE(low.filt.cells[tvar] > 0), low.filt.cells[tvar], 200)
+tvar <- which(names(qc_filters[[1]]) == 'nFeature_RNA')
+nFeature_min = ifelse(isTRUE(qc_filters$low[tvar] > 0), qc_filters$low[tvar], 0)
 if(defargs$verbose) cat("Calculating number of expressed features and expressing samples.\n")
 # Slow and will probably be re-calculated
-nSamples_expressed <- Matrix::rowSums(expr_data > 0); summary(nSamples_expressed)
-efeatures <- Matrix::colSums(expr_data > 0); summary(efeatures)
 if(defargs$verbose){
   cat("Samples/cells:", ncol(expr_data), "\n"); cat("Features:", nrow(expr_data), "\n")
   cat('Minimal filtering: keeping genes with >=', nSamples_min,
-  'samples/cells expressing them & cells with >=', 0,' expressed genes)...\n')
+  'samples/cells expressing them & cells with >=', nFeature_min,' expressed genes)...\n')
 }
-expr_data <- expr_data[nSamples_expressed >= nSamples_min, efeatures >= nFeature_min]
+nSamples_expressed <- Matrix::rowSums(expr_data > 0); summary(nSamples_expressed)
+expr_data <- expr_data[, nFeatures_expressd >= nFeature_min] # first cells first; and so features reflect the final set
+nFeatures_expressd <- Matrix::colSums(expr_data > nFeature_min); summary(nFeatures_expressd)
+expr_data <- expr_data[nSamples_expressed >= nSamples_min, ]
 if(defargs$verbose){ cat("Samples/cells:", ncol(expr_data), "\n"); cat("Features:", nrow(expr_data), "\n") }
 ### ####### ####### ##### ### ##### ##
 
@@ -222,39 +207,39 @@ if(defargs$verbose){
 
 #### Filtering variables ####---------------------------------------------------
 if(defargs$verbose) cat('\n\nDistribution of filtering criteria\n')
-meta_data[, ivariables] <- apply(meta_data[, ivariables, drop = FALSE], 2, function(x){
+meta_data[, names(qc_filters[[1]])] <- apply(meta_data[, names(qc_filters[[1]]), drop = FALSE], 2, function(x){
   y <- x; y[is.na(y)] <- Inf; return(y); #any(is.na(x))
 })
-summ <- sapply(meta_data[, ivariables, drop = FALSE], function(x){
+summ <- sapply(meta_data[, names(qc_filters[[1]]), drop = FALSE], function(x){
   c(rev(summary(x)),
     quantile(x[!is.na(x)], prob = c(.001, 0.992)))
 })
 # print(summ[c('Min.', 'Max.'), ]) # adding selected thresholds
-tvar <- t(data.frame(row.names = ivariables, low.filt.cells, high.filt.cells))
+tvar <- t(data.frame(row.names = names(qc_filters[[1]]), qc_filters$low, qc_filters$high))
 tvar <- ifelse(is.infinite(tvar), summ[c('Min.', 'Max.'), ], tvar)
 print(rbind(summ, tvar))
 write.csv(rbind(summ, tvar), file = "filters_summary.csv")
 summ <- rbind(summ[7:8, ], tvar) # change infinites for boundaries and merge quantiles
 head(summ)
 
-tvar <- sapply(1:length(ivariables), function(x){ # checking for metric unique values
-  length(table(meta_data[, ivariables[x]])) < 3
+tvar <- sapply(1:length(names(qc_filters[[1]])), function(x){ # checking for metric unique values
+  length(table(meta_data[, names(qc_filters[[1]])[x]])) < 3
 })
 if(defargs$verbose) cat("Removing parameters with constant value accrosss cells:", sum(tvar), "\n")
-low.filt.cells <- low.filt.cells[!tvar]; high.filt.cells <- high.filt.cells[!tvar]
-names(low.filt.cells) <- names(high.filt.cells) <- ivariables <- ivariables[!tvar]
+qc_filters$low <- qc_filters$low[!tvar]; qc_filters$high <- qc_filters$high[!tvar]
+names(qc_filters$low) <- names(qc_filters$high) <- names(qc_filters[[1]]) <- names(qc_filters[[1]])[!tvar]
 # Checking for automatic/default filtering
-tvar <- list(ivariables, c("low.filt.cells", "high.filt.cells"))
+tvar <- list(names(qc_filters[[1]]), c("qc_filters$low", "qc_filters$high"))
 default_filters <- matrix(nrow = length(tvar[[1]]), ncol = length(tvar[[2]]), dimnames = tvar)
-default_filters[, "low.filt.cells"] <- low.filt.cells[c(ivariables)]
-default_filters[, "high.filt.cells"] <- high.filt.cells[c(ivariables)]
+default_filters[, "qc_filters$low"] <- qc_filters$low[c(names(qc_filters[[1]]))]
+default_filters[, "qc_filters$high"] <- qc_filters$high[c(names(qc_filters[[1]]))]
 # Boundaries when indicated (-1)
-low.filt.cells <- ifelse(low.filt.cells == -1, summ[1, ivariables], low.filt.cells)
-high.filt.cells <- ifelse(high.filt.cells == -1, summ[2, ivariables], high.filt.cells)
+qc_filters$low <- ifelse(qc_filters$low == -1, summ[1, names(qc_filters[[1]])], qc_filters$low)
+qc_filters$high <- ifelse(qc_filters$high == -1, summ[2, names(qc_filters[[1]])], qc_filters$high)
 # Defaults when indicated (-2)
-low.filt.cells <- ifelse(low.filt.cells == -2, default_filters[ivariables, 1], low.filt.cells)
-high.filt.cells <- ifelse(high.filt.cells == -2, default_filters[ivariables, 2], high.filt.cells)
-filtersdf <- data.frame(low.filt.cells, high.filt.cells, apply_filter)
+qc_filters$low <- ifelse(qc_filters$low == -2, default_filters[names(qc_filters[[1]]), 1], qc_filters$low)
+qc_filters$high <- ifelse(qc_filters$high == -2, default_filters[names(qc_filters[[1]]), 2], qc_filters$high)
+filtersdf <- data.frame(qc_filters$low, qc_filters$high, qc_filters$apply)
 summ[3:4, ] <- t(filtersdf[, -3])
 fname <- paste0('filters_table.csv'); if(!file.exists(fname)) write.csv(filtersdf, file = fname)
 print(filtersdf)
@@ -345,39 +330,39 @@ if(all(class_params %in% colnames(meta_data))){
 
 # visualisation ####------------------------------------------------------------
 if(defargs$verbose) cat("Scatter filters\n")
-qc_scatters(dat = meta_data, thresholds = summ[, apply_filter], prefix = "0_qc")
+qc_scatters(dat = meta_data, thresholds = summ[, qc_filters$apply], prefix = "0_qc")
 
 if(!exists('meta_databk')) meta_databk <- meta_data
-vlns <- lapply(ivariables, function(x){
-  qc_violin(dat = meta_data, xax = "orig.qc_tag", yax = x, lb_filt = low.filt.cells, hb_filt = high.filt.cells, filtby = apply_filter)
+vlns <- lapply(names(qc_filters[[1]]), function(x){
+  qc_violin(dat = meta_data, xax = "orig.qc_tag", yax = x, lb_filt = qc_filters$low, hb_filt = qc_filters$high, filtby = qc_filters$apply)
 })
 is_simple <- length(table(meta_data$orig.qc_tag)) < 3 & length(vlns) < 4
-mygrid <- make_grid(length(ivariables), ncol = if(is_simple) 3)
+mygrid <- make_grid(length(names(qc_filters[[1]])), ncol = if(is_simple) 3)
 pdf(paste0('0_qc_all_qc_tag.pdf'), width = 5.5 * mygrid[2], height = 5 * mygrid[1])
 print(cowplot::plot_grid(plotlist = vlns, ncol = mygrid[2]))
 graphics.off()
 
 for(prefix in c("1_qc", "2_filtered")){
   if(defargs$verbose) cat("=======================", prefix, "\n")
-  vlns <- lapply(ivariables, function(x){
-    qc_violin(dat = meta_data, yax = x, lb_filt = low.filt.cells, hb_filt = high.filt.cells, filtby = apply_filter)
+  vlns <- lapply(names(qc_filters[[1]]), function(x){
+    qc_violin(dat = meta_data, yax = x, lb_filt = qc_filters$low, hb_filt = qc_filters$high, filtby = qc_filters$apply)
   })
   is_simple <- length(table(meta_data$orig.qc_tag)) < 3 & length(vlns) < 4
-  mygrid <- make_grid(length(ivariables), ncol = if(is_simple) 3)
+  mygrid <- make_grid(length(names(qc_filters[[1]])), ncol = if(is_simple) 3)
   pdf(paste0(prefix, '_all_data.pdf'), width = 5.5 * mygrid[2], height = 5 * mygrid[1])
   print(cowplot::plot_grid(plotlist = vlns, ncol = mygrid[2]))
   graphics.off()
-  orignamesp <- orignames[!orignames %in% ivariables]
+  orignamesp <- orignames[!orignames %in% names(qc_filters[[1]])]
   if(length(orignamesp) > 0){
     for(origs in orignamesp){
       if(defargs$verbose) cat(paste0(origs, ", "))
       fname <- paste0(prefix, '_all_data_confounder', sub("orig", "", origs), '.pdf')
-      void <- lapply(ivariables, function(x){
+      void <- lapply(names(qc_filters[[1]]), function(x){
         qc_violin(
           dat = meta_data, xax = origs, yax = x,
-          lb_filt = low.filt.cells,
-          hb_filt = high.filt.cells,
-          filtby = apply_filter
+          lb_filt = qc_filters$low,
+          hb_filt = qc_filters$high,
+          filtby = qc_filters$apply
         )
       }); sfact <- if(length(table(meta_data[, origs])) < 10) 5.5 else 3
       pdf(fname, width = sfact * mygrid[2], height = sfact * mygrid[1])
@@ -390,14 +375,14 @@ for(prefix in c("1_qc", "2_filtered")){
   }
   if(prefix == "1_qc"){
     if(defargs$verbose) cat('Filtering cells\n')
-    print(filtersdf[apply_filter, 1:2])
+    print(filtersdf[qc_filters$apply, 1:2])
     tvar <- paste(
-      paste(ivariables[apply_filter], ">=", low.filt.cells[apply_filter], collapse = " & "),
-      paste(ivariables[apply_filter], "<=", high.filt.cells[apply_filter], collapse = " & "),
+      paste(names(qc_filters[[1]])[qc_filters$apply], ">=", qc_filters$low[qc_filters$apply], collapse = " & "),
+      paste(names(qc_filters[[1]])[qc_filters$apply], "<=", qc_filters$high[qc_filters$apply], collapse = " & "),
     sep = " & ")
     if(defargs$verbose) cat("Criteria:", tvar, "\n")
     sset <- paste0("meta_data <- subset(x = meta_data, subset = ", tvar, ")") # << choose wisely
-    if(!all(is.infinite(c(high.filt.cells[apply_filter], low.filt.cells[apply_filter])))){
+    if(!all(is.infinite(c(qc_filters$high[qc_filters$apply], qc_filters$low[qc_filters$apply])))){
       if(defargs$verbose) cat('- Before:', nrow(meta_databk), '\n')
       eval(expr = parse(text = sset))
       if(defargs$verbose) cat('- After:', nrow(meta_data), '\n')
@@ -415,12 +400,12 @@ for(prefix in c("1_qc", "2_filtered")){
         for(origs in orignamesp){
           if(defargs$verbose) cat(".")
           fname <- paste0(prefix, '_all_data_confounders_', qc_tag, sub("orig", "", origs), '.pdf')
-          void <- lapply(ivariables, function(x){
+          void <- lapply(names(qc_filters[[1]]), function(x){
             qc_violin(
               dat = meta_data_ss, xax = origs, yax = x,
-              lb_filt = low.filt.cells,
-              hb_filt = high.filt.cells,
-              filtby = apply_filter
+              lb_filt = qc_filters$low,
+              hb_filt = qc_filters$high,
+              filtby = qc_filters$apply
             )
           }); sfact <- if(length(table(meta_data_ss[, origs])) < 10) 5.5 else 3
           pdf(fname, width = sfact * mygrid[2], height = sfact * mygrid[1])
@@ -434,7 +419,7 @@ for(prefix in c("1_qc", "2_filtered")){
     }
   } # Finish filtering
 }
-qc_scatters(dat = meta_data, thresholds = summ[, apply_filter], prefix = "3_qc")
+qc_scatters(dat = meta_data, thresholds = summ[, qc_filters$apply], prefix = "3_qc")
 # ############# ####------------------------------------------------------------
 
 save(meta_data, file = "metadata_filtered.rdata")
