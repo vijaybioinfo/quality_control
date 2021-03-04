@@ -16,6 +16,10 @@ optlist <- list(
     help = "Configuration file: Instructions in YAML format."
   ),
   make_option(
+    opt_str = c("-l", "--log"), default = FALSE,
+    help = "Log file: Create a log file rather to stdout."
+  ),
+  make_option(
     opt_str = c("-v", "--verbose"), default = TRUE,
     help = "Verbose: Show progress."
   )
@@ -23,13 +27,39 @@ optlist <- list(
 
 # Getting arguments from command line and setting their values to their respective variable names.
 optparse <- OptionParser(option_list = optlist)
-defargs <- parse_args(optparse)
+opt <- parse_args(optparse)
 if(interactive()){ # Example/manually
-  defargs$yaml = "/home/ciro/fungal_allergy/scripts/qc_config.yaml"
+  opt$yaml = "/home/ciro/fungal_allergy/scripts/qc_config.yaml"
 }
-config = read_yaml(defargs$yaml)
-str(config)
+config = read_yaml(opt$yaml)
 options(warn = -1)
+
+suppressPackageStartupMessages(library(crayon))
+if(opt$verbose){
+  cat(cyan("\n************ Vijay Lab - LJI\n"))
+  cat(cyan("-------------------------------------\n"))
+  cat(red$bold("------------ Quality Control analysis\n"))
+}
+
+#### Directories structure ####-------------------------------------------------
+output_dir <- paste0(sub("\\/$", "", config$output_dir), "/", config$project_name, "/")
+if(!grepl("scratch|beegfs", getwd())){
+  cat("No scratch folder involved; careful about temp files...\n")
+  dir.create(output_dir, recursive = TRUE); setwd(output_dir)
+}
+cat("Working in:", getwd(), "\n")
+#### ########### ######### ####-------------------------------------------------
+### Log file ####---------------------------------------------------------------
+log_file <- paste0(output_dir, '_qc.log')
+register_log <- (!interactive() && grepl("scratch|beegfs", getwd())) || opt$log
+if(register_log){
+  if(opt$verbose) cat("Check log file:", log_file, "\n")
+  if(!file.exists(log_file)) file.create(log_file)
+  out.file <- file(log_file, open = 'wt')
+  sink(out.file) ; sink(out.file, type = 'message')
+}
+cat('Date and time:\n') ; st.time <- timestamp();
+### ### #### ####---------------------------------------------------------------
 
 #### Functions ####-------------------------------------------------------------
 cat("Loading functions\n")
@@ -38,10 +68,10 @@ resources = c(
   "https://raw.githubusercontent.com/vijaybioinfo/handy_functions/master/devel/file_reading.R", # readfile
   "/home/ciro/scripts/clustering/R/utilities.R", # get_source_data add_pcts filters_qc_limits
   "https://raw.githubusercontent.com/vijaybioinfo/handy_functions/master/devel/filters.R", # filters_complex
-  "/home/ciro/scripts/clustering/R/plotting.R", # feature_scatter qc_violin
+  "/home/ciro/scripts/clustering/R/plotting.R", # feature_scatter qc_violin simple_violin
   "https://raw.githubusercontent.com/vijaybioinfo/handy_functions/master/devel/plots.R", # make_grid
   # Soon to be changed # ---
-  "https://raw.githubusercontent.com/vijaybioinfo/handy_functions/master/devel/plotting_dismantle.R" # plot_corr simple_violin
+  "https://raw.githubusercontent.com/vijaybioinfo/handy_functions/master/devel/plotting_dismantle.R" # plot_corr
 )
 for(i in resources){ source(i) }
 qc_scatters <- function(
@@ -76,22 +106,6 @@ qc_scatters <- function(
   }
 }
 #### ######### ####-------------------------------------------------------------
-output_dir <- paste0(sub("\\/$", "", config$output_dir), "/", config$project_name, "/")
-setwd(output_dir)
-
-#### Directories structure ####-------------------------------------------------
-# defargs$output_dir <- paste0(defargs$output_dir, "qc/")
-#### ########### ######### ####-------------------------------------------------
-### Log file ####---------------------------------------------------------------
-log_file <- paste0(output_dir, 'a1_qc.log')
-register_log <- !interactive() && TRUE
-if(register_log){
-  if(!file.exists(log_file)) file.create(log_file)
-  out.file <- file(log_file, open = 'wt')
-  sink(out.file) ; sink(out.file, type = 'message')
-}
-cat('Date and time:\n') ; st.time <- timestamp();
-### ### #### ####---------------------------------------------------------------
 
 #### Loading dependencies ####--------------------------------------------------
 packages <- c("ggplot2", "cowplot")
@@ -102,14 +116,14 @@ theme_set(theme_cowplot())
 #### ####### ############ ####--------------------------------------------------
 
 #### Presenting Parameters ####-------------------------------------------------
-str(config)
-cat('\n\n----------------------- Digesting parameters --------------------\n')
+str(opt); str(config)
+if(opt$verbose) cat('\n\n----------------------- Digesting parameters --------------------\n')
 qc_filters <- filters_qc_limits(f = config$filtering)
 config$filtering$nSamples_expressed <- if(is.null(config$filtering$nSamples_expressed)) 0.001 else config$filtering$nSamples_expressed[[1]]
 #### ########## ########## ####-------------------------------------------------
 
 #### Getting data ####----------------------------------------------------------
-if(defargs$verbose) cat('----------------------- Loading data -----------------------\n')
+if(opt$verbose) cat('----------------------- Loading data ----------------------------\n')
 Sys.time()
 # Find 10X directory (barcodes, gene_names, counts), Seurat object, CSV file, TXT, RDS
 expr_data <- get_source_data(
@@ -117,7 +131,7 @@ expr_data <- get_source_data(
   pj = config$project_name,
   metadata = config$metadata[1],
   merge_counts = grepl("meco|merge", config$project_name) || !dir.exists(config$input_expression),
-  verbose = defargs$verbose
+  verbose = opt$verbose
 )
 Sys.time()
 config$input_expression <- expr_data$source
@@ -130,7 +144,7 @@ tvar <- file.exists(addmetadataf)
 str(addmetadataf)
 if(any(tvar)){
   addmetadataf <- addmetadataf[tvar]
-  if(defargs$verbose) cat("Adding metadata from:", addmetadataf, sep = "\n")
+  if(opt$verbose) cat("Adding metadata from:", addmetadataf, sep = "\n")
   for(addmetadataf_i in addmetadataf){
     addannot <- remove.factors(readfile(addmetadataf_i))
     print(dim(meta_data))
@@ -141,50 +155,53 @@ if(any(tvar)){
 }; fname <- paste0('metadata.rdata'); if(!file.exists(fname)) save(meta_data, file = fname)
 #### ####### #### ####----------------------------------------------------------
 
-#### Initial Filtering ####-----------------------------------------------------
-filtereddata <- filters_complex(
+if(opt$verbose) cat('----------------------- Initial filters -------------------------\n')
+filtereddata <- filters_complex( # if you won't use all the data, you need to filter it first
   mdata = meta_data,
   filters = lapply(names(config$filtering$subset), function(x) c(x, config$filtering$subset[[x]]) ),
-  verbose = defargs$verbose
+  verbose = opt$verbose
 )
 meta_data <- filtereddata[[1]]; rm(filtereddata)
 
 ### Minimal filter: cells and genes ###
-nSamples_min = ceiling(config$filtering$nSamples_expressed * ncol(expr_data))
+if(opt$verbose){
+  cat("\nCalculating number of expressed features and expressing samples.\n")
+  cat("Samples/cells:", ncol(expr_data), "\n"); cat("Features:", nrow(expr_data), "\n")
+}
+# Slow and will probably be re-calculated
 tvar <- which(names(qc_filters[[1]]) == 'nFeature_RNA')
 nFeature_min = ifelse(isTRUE(qc_filters$low[tvar] > 0), qc_filters$low[tvar], 0)
-if(defargs$verbose) cat("Calculating number of expressed features and expressing samples.\n")
-# Slow and will probably be re-calculated
-if(defargs$verbose){
-  cat("Samples/cells:", ncol(expr_data), "\n"); cat("Features:", nrow(expr_data), "\n")
-  cat('Minimal filtering: keeping genes with >=', nSamples_min,
-  'samples/cells expressing them & cells with >=', nFeature_min,' expressed genes)...\n')
-}
+if(opt$verbose) cat('Minimal filtering: keeping cells with >=', nFeature_min, 'expressed genes.\n')
+nFeatures_expressd <- Matrix::colSums(expr_data > 0); summary(nFeatures_expressd)
+# filter cells first; and so features reflect the final set
+expr_data <- expr_data[, nFeatures_expressd >= nFeature_min]
+
 nSamples_expressed <- Matrix::rowSums(expr_data > 0); summary(nSamples_expressed)
-expr_data <- expr_data[, nFeatures_expressd >= nFeature_min] # first cells first; and so features reflect the final set
-nFeatures_expressd <- Matrix::colSums(expr_data > nFeature_min); summary(nFeatures_expressd)
+nSamples_min = ceiling(config$filtering$nSamples_expressed * ncol(expr_data))
+if(opt$verbose) cat('Minimal filtering: keeping genes with >=', nSamples_min, 'samples/cells expressing them.\n')
 expr_data <- expr_data[nSamples_expressed >= nSamples_min, ]
-if(defargs$verbose){ cat("Samples/cells:", ncol(expr_data), "\n"); cat("Features:", nrow(expr_data), "\n") }
+if(opt$verbose){ cat("Samples/cells:", ncol(expr_data), "\n"); cat("Features:", nrow(expr_data), "\n") }
 ### ####### ####### ##### ### ##### ##
 
 cellsf <- show_found(colnames(expr_data), rownames(meta_data), element = 'samples/cells', v = TRUE)
 meta_data <- meta_data[cellsf, , drop = FALSE]
 expr_data <- expr_data[, cellsf]
 
-if("orig.ident" %in% colnames(meta_data)){ # if the meta data comes from a Seurat object, check if it has cluster columns
-  if(defargs$verbose) cat("Preserve previous analyses clusters\n")
-  for(orig in grepatrn(colnames(meta_data), accept = '^res|.*_snn_res')){
-    # pastes previous project name and its clusters
+if("orig.ident" %in% colnames(meta_data)){
+  # if the meta data comes from a Seurat object, check if it has cluster columns
+  # previous project name and its clusters are renamed
+  if(opt$verbose) cat("Preserve previous analyses clusters\n")
+  for(orig in grep('^res|.*_snn_res', colnames(meta_data), value = TRUE)){
     meta_data[, orig] <- paste0(meta_data[, "orig.ident"], "_", meta_data[, orig])
   }
 }; colnames(meta_data) <- casefold(make.names(sub('^res|.*_snn_res', 'orig', colnames(meta_data)), unique = TRUE))
 tvar <- grep(pattern = "orig.ident|seurat_clusters", x = colnames(meta_data), value = TRUE, invert = TRUE)
-if(defargs$verbose) cat("Keeping", length(tvar), "of", ncol(meta_data), "columns\n")
+if(opt$verbose) cat("Keeping", length(tvar), "of", ncol(meta_data), "columns\n")
 meta_data <- meta_data[, tvar, drop = FALSE]
 #### ####### ######### ####-----------------------------------------------------
 
 #### Adding variables of interest ####------------------------------------------
-if(defargs$verbose) cat("\n\nAdding QC metrics from features (percentages of counts)\n")
+if(opt$verbose) cat("\n\nAdding QC metrics from features (percentages of counts)\n")
 meta_data <- add_pcts(
   mdata = meta_data,
   edata = expr_data,
@@ -199,33 +216,39 @@ meta_data$nFeature_RNA <- Matrix::colSums(expr_data[, rownames(meta_data)] > 0)
 meta_data$nCount_RNA <- Matrix::colSums(expr_data[, rownames(meta_data)])
 meta_data$Data = casefold(x = config$project_name, upper = TRUE)
 #### ###### ######### ## ######## ####------------------------------------------
-if(defargs$verbose){
-  cat("Presenting data:\nAnnotation:\n"); str(meta_data[, headtail(1:ncol(meta_data), 5)])
+if(opt$verbose){
+  cat("Presenting data:\nAnnotation:\n"); str(meta_data)
   cat("Matrix:"); str(expr_data)
   cat("Aprox. expression range"); print(summary(as.matrix(expr_data[, sample(1:ncol(expr_data), 4)])))
 }; fname <- paste0('metadata_prefilter.rdata'); save(meta_data, file = fname)
 
 #### Filtering variables ####---------------------------------------------------
-if(defargs$verbose) cat('\n\nDistribution of filtering criteria\n')
+if(opt$verbose) cat('\n\nDistribution of filtering criteria\n')
 meta_data[, names(qc_filters[[1]])] <- apply(meta_data[, names(qc_filters[[1]]), drop = FALSE], 2, function(x){
   y <- x; y[is.na(y)] <- Inf; return(y); #any(is.na(x))
 })
 summ <- sapply(meta_data[, names(qc_filters[[1]]), drop = FALSE], function(x){
   c(rev(summary(x)),
-    quantile(x[!is.na(x)], prob = c(.001, 0.992)))
+    quantile(x[!is.na(x)], prob = c(.001, 0.1, 0.9, 0.992)))
 })
-# print(summ[c('Min.', 'Max.'), ]) # adding selected thresholds
 tvar <- t(data.frame(row.names = names(qc_filters[[1]]), qc_filters$low, qc_filters$high))
 tvar <- ifelse(is.infinite(tvar), summ[c('Min.', 'Max.'), ], tvar)
 print(rbind(summ, tvar))
-write.csv(rbind(summ, tvar), file = "filters_summary.csv")
-summ <- rbind(summ[7:8, ], tvar) # change infinites for boundaries and merge quantiles
+mytab = rbind(summ, tvar)
+rs = c(
+  "qc_filters.low", "qc_filters.high", "Min.", "0.1%", "10%", "1st Qu.",
+  "Median", "Mean", "3rd Qu.", "90%", "99.2%", "Max."
+)
+rs = rs[rs %in% rownames(mytab)]
+if(length(rs) > (nrow(mytab) / 2)) mytab = mytab[rs, ]
+write.csv(mytab, file = "filters_summary.csv")
+summ <- rbind(summ[c("0.1%", "99.2%"), ], tvar) # change infinites for boundaries and merge quantiles
 head(summ)
 
 tvar <- sapply(1:length(names(qc_filters[[1]])), function(x){ # checking for metric unique values
   length(table(meta_data[, names(qc_filters[[1]])[x]])) < 3
 })
-if(defargs$verbose) cat("Removing parameters with constant value accrosss cells:", sum(tvar), "\n")
+if(opt$verbose) cat("Removing parameters with constant value accrosss cells:", sum(tvar), "\n")
 qc_filters$low <- qc_filters$low[!tvar]; qc_filters$high <- qc_filters$high[!tvar]
 names(qc_filters$low) <- names(qc_filters$high) <- names(qc_filters[[1]]) <- names(qc_filters[[1]])[!tvar]
 # Checking for automatic/default filtering
@@ -244,13 +267,13 @@ summ[3:4, ] <- t(filtersdf[, -3])
 fname <- paste0('filters_table.csv'); if(!file.exists(fname)) write.csv(filtersdf, file = fname)
 print(filtersdf)
 
-if(defargs$verbose) cat("\n\nGroups found in data:\n")
+if(opt$verbose) cat("\n\nGroups found in data:\n")
 orignames <- grep(pattern = "orig", x = colnames(meta_data), value = TRUE)
 tvar <- lapply(meta_data[, orignames], table, useNA = 'always')
 print(tvar); orignames <- orignames[sapply(tvar, length) > 1]
 
 ### Classifying cell quality ###------------------------------------------------
-if(defargs$verbose){
+if(opt$verbose){
   cat("\n\nClassification of cell quality\n")
   cat("--- Zhang Lab; Guo et al 2018\n") # they removed ribosomal reads before mapping to the reference
 }
@@ -272,7 +295,7 @@ meta_data$orig.qc_tag <- "ALL"
 class_params <- c('Total_genes', 'final_STAR_counts', 'uniquely_mapped_reads_perc', 'bias_5to3_prim', 'percent.mt')
 plate_name = "orig.Plate"
 if(all(class_params %in% colnames(meta_data))){
-  if(defargs$verbose) cat("--- Vijay Lab: Smart-Seq2\n")
+  if(opt$verbose) cat("--- Vijay Lab: Smart-Seq2\n")
   meta_data$orig.qc_tag <- "Manual"
   meta_data$orig.qc_tag[meta_data$Total_genes < 200 & meta_data$final_STAR_counts >= 50000] <- "1.Bad"
   reseq_def <- sapply(unique(meta_data$orig.Plate), function(x){
@@ -293,11 +316,11 @@ if(all(class_params %in% colnames(meta_data))){
 ### ########### #### ####### ###------------------------------------------------
 
 # #### Qlucore file ####----------------------------------------------------------
-# if(defargs$verbose) cat("\n\n----- Qlucore input -------\n")
+# if(opt$verbose) cat("\n\n----- Qlucore input -------\n")
 # passed <- if(is.null(meta_data$orig.qc_tag)){
 #   rownames(meta_data)
 # }else{
-#   if(defargs$verbose) cat("Using only the 'good' ones.\n")
+#   if(opt$verbose) cat("Using only the 'good' ones.\n")
 #   rownames(meta_data[meta_data$orig.qc_tag == "Good", ])
 # }
 # tvar <- gsub("raw\\.", "TPM\\.", config$input_expression)
@@ -311,25 +334,25 @@ if(all(class_params %in% colnames(meta_data))){
 # for(thresh in c(0, 5)){
 #   gmeans <- sort(Matrix::rowMeans(expr_data_t[, passed]), decreasing = TRUE)
 #   genes <- rownames(expr_data_t[names(gmeans[gmeans > thresh]), ])
-#   if(defargs$verbose) cat(length(genes), "of", nrow(expr_data_t), 'features\n')
+#   if(opt$verbose) cat(length(genes), "of", nrow(expr_data_t), 'features\n')
 #   mysamples <- sample_grp(annot = meta_data, cname = 'Data', maxln = '5000')
-#   if(defargs$verbose) cat(length(mysamples), "of", ncol(expr_data_t), 'samples\n')
+#   if(opt$verbose) cat(length(mysamples), "of", ncol(expr_data_t), 'samples\n')
 #   suffix <- paste0("qlucore", if(is.numeric(thresh)) paste0("_gt", thresh, "mean_") else paste0("_", thresh, "_"))
 #   suffix <- paste0(suffix, length(genes), "genes", nrow(meta_data), "samples")
 #   suffix <- paste0(suffix, suffixtag, ".txt")
 #   nameout <- paste0(suffix)
-#   if(defargs$verbose) cat("Qlucore file:", nameout, "\n")
+#   if(opt$verbose) cat("Qlucore file:", nameout, "\n")
 #   if(!file.exists(nameout)){
 #     qf <- qlucore_format(mat = expr_data_t, metadata = meta_data, rnames = genes, cnames = , v = TRUE)
 #     write.table(qf, file = nameout, sep = "\t", quote = FALSE, row.names = FALSE)
 #   }else{
-#     if(defargs$verbose) cat("Exists\n")
+#     if(opt$verbose) cat("Exists\n")
 #   }
-# }; if(defargs$verbose) cat(list.files(path = "./", pattern = "qlucore"), sep = "\n")
+# }; if(opt$verbose) cat(list.files(path = "./", pattern = "qlucore"), sep = "\n")
 # #### ####### #### ####----------------------------------------------------------
 
-# visualisation ####------------------------------------------------------------
-if(defargs$verbose) cat("Scatter filters\n")
+if(opt$verbose) cat('----------------------- Plots and final filters -----------------\n')
+if(opt$verbose) cat("Scatter filters\n")
 qc_scatters(dat = meta_data, thresholds = summ[, qc_filters$apply], prefix = "0_qc")
 
 if(!exists('meta_databk')) meta_databk <- meta_data
@@ -343,19 +366,19 @@ print(cowplot::plot_grid(plotlist = vlns, ncol = mygrid[2]))
 graphics.off()
 
 for(prefix in c("1_qc", "2_filtered")){
-  if(defargs$verbose) cat("=======================", prefix, "\n")
+  if(opt$verbose) cat("=======================", prefix, "\n")
   vlns <- lapply(names(qc_filters[[1]]), function(x){
     qc_violin(dat = meta_data, yax = x, lb_filt = qc_filters$low, hb_filt = qc_filters$high, filtby = qc_filters$apply)
   })
   is_simple <- length(table(meta_data$orig.qc_tag)) < 3 & length(vlns) < 4
   mygrid <- make_grid(length(names(qc_filters[[1]])), ncol = if(is_simple) 3)
-  pdf(paste0(prefix, '_all_data.pdf'), width = 5.5 * mygrid[2], height = 5 * mygrid[1])
+  pdf(paste0(prefix, '_all_data.pdf'), width = 5.5 * mygrid[2], height = ifelse(is_simple, 7, 5) * mygrid[1])
   print(cowplot::plot_grid(plotlist = vlns, ncol = mygrid[2]))
   graphics.off()
   orignamesp <- orignames[!orignames %in% names(qc_filters[[1]])]
   if(length(orignamesp) > 0){
     for(origs in orignamesp){
-      if(defargs$verbose) cat(paste0(origs, ", "))
+      if(opt$verbose) cat(paste0(origs, ", "))
       fname <- paste0(prefix, '_all_data_confounder', sub("orig", "", origs), '.pdf')
       void <- lapply(names(qc_filters[[1]]), function(x){
         qc_violin(
@@ -365,29 +388,30 @@ for(prefix in c("1_qc", "2_filtered")){
           filtby = qc_filters$apply
         )
       }); sfact <- if(length(table(meta_data[, origs])) < 10) 5.5 else 3
-      pdf(fname, width = sfact * mygrid[2], height = sfact * mygrid[1])
+      pdf(fname, width = sfact * mygrid[2], height = ifelse(is_simple, 7, sfact) * mygrid[1])
       if(length(table(meta_data[, origs])) < 10){
         print(cowplot::plot_grid(plotlist = void, ncol = mygrid[2]))
       }else{
         tvar <- lapply(void, print)
       }; graphics.off()
-    }; if(defargs$verbose) cat("\n")
+    }; if(opt$verbose) cat("\n")
   }
   if(prefix == "1_qc"){
-    if(defargs$verbose) cat('Filtering cells\n')
+    if(opt$verbose) cat('Filtering cells\n')
     print(filtersdf[qc_filters$apply, 1:2])
     tvar <- paste(
       paste(names(qc_filters[[1]])[qc_filters$apply], ">=", qc_filters$low[qc_filters$apply], collapse = " & "),
       paste(names(qc_filters[[1]])[qc_filters$apply], "<=", qc_filters$high[qc_filters$apply], collapse = " & "),
     sep = " & ")
-    if(defargs$verbose) cat("Criteria:", tvar, "\n")
+    if(!is.null(config$filtering$subset$expr)) tvar <- paste("(", config$filtering$subset$expr, ") & ", tvar)
+    if(opt$verbose) cat("Criteria:", tvar, "\n")
     sset <- paste0("meta_data <- subset(x = meta_data, subset = ", tvar, ")") # << choose wisely
     if(!all(is.infinite(c(qc_filters$high[qc_filters$apply], qc_filters$low[qc_filters$apply])))){
-      if(defargs$verbose) cat('- Before:', nrow(meta_databk), '\n')
+      if(opt$verbose) cat('- Before:', nrow(meta_databk), '\n')
       eval(expr = parse(text = sset))
-      if(defargs$verbose) cat('- After:', nrow(meta_data), '\n')
+      if(opt$verbose) cat('- After:', nrow(meta_data), '\n')
     }; if(nrow(meta_databk) == nrow(meta_data)) break
-    if(defargs$verbose) cat("------------- Per quality plots\n")
+    if(opt$verbose) cat("------------- Per quality plots\n")
     if(is.null(meta_databk$orig.qc_tag)){
       meta_databk$orig.qc_tag <- "Good"
       meta_databk[!rownames(meta_databk) %in% rownames(meta_data), ]$orig.qc_tag <- "bad"
@@ -398,7 +422,7 @@ for(prefix in c("1_qc", "2_filtered")){
       orignamesp <- if(plate_name %in% colnames(meta_data_ss)) plate_name else "origlib"
       if(length(orignamesp) > 0){
         for(origs in orignamesp){
-          if(defargs$verbose) cat(".")
+          if(opt$verbose) cat(".")
           fname <- paste0(prefix, '_all_data_confounders_', qc_tag, sub("orig", "", origs), '.pdf')
           void <- lapply(names(qc_filters[[1]]), function(x){
             qc_violin(
@@ -408,13 +432,13 @@ for(prefix in c("1_qc", "2_filtered")){
               filtby = qc_filters$apply
             )
           }); sfact <- if(length(table(meta_data_ss[, origs])) < 10) 5.5 else 3
-          pdf(fname, width = sfact * mygrid[2], height = sfact * mygrid[1])
+          pdf(fname, width = sfact * mygrid[2], height = ifelse(is_simple, 7, sfact) * mygrid[1])
           if(length(table(meta_data_ss[, origs])) < 10){
             print(cowplot::plot_grid(plotlist = void, ncol = mygrid[2]))
           }else{
             tvar <- lapply(void, print)
           }; graphics.off()
-        }; if(defargs$verbose) cat("\n")
+        }; if(opt$verbose) cat("\n")
       }
     }
   } # Finish filtering
@@ -426,12 +450,13 @@ save(meta_data, file = "metadata_filtered.rdata")
 write.table(rownames(expr_data), file = "feature_names.txt", quote = FALSE, row.names = FALSE, col.names = FALSE);
 #### ######### ######### ####---------------------------------------------------
 
-if(defargs$verbose){
-  cat('\nDONE\nStarting time:\n', st.time, '\n')
-  cat('Finishing time:\n') ; timestamp()
+if(opt$verbose){
   cat('\n\n*******************************************************************\n')
-  cat('SESSION INFO:\n') ; print(sessionInfo())
-  cat('*******************************************************************\n\n')
+  cat('Starting time:\n'); cat(st.time, '\n')
+  cat('Finishing time:\n'); timestamp()
+  cat('*******************************************************************\n')
+  cat('SESSION INFO:\n'); print(sessionInfo()); cat("\n")
+  cat('Pipeline finished successfully\n')
 }
 if(register_log){
   sink(type = 'message')
