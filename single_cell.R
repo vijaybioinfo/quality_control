@@ -283,11 +283,11 @@ tvar <- t(sapply(class_params, function(x){
   y <- (3 * mad(meta_data[, x], constant = 1, low = TRUE))
   c(median(meta_data[, x]) - y, median(meta_data[, x]) + y)
 }))# average count > 1
-meta_data$orig.qc_tag_guo <- "Good"
+meta_data$qc_tag_guo <- "Good"
 for(i in 1:nrow(tvar)){
-  meta_data$orig.qc_tag_guo[meta_data[, names(tvar[i, 2])] > tvar[i, 2]] <- "Bad"
-  meta_data$orig.qc_tag_guo[meta_data[, names(tvar[i, 1])] < tvar[i, 1]] <- "Bad"
-}; table(meta_data$orig.qc_tag_guo)
+  meta_data$qc_tag_guo[meta_data[, names(tvar[i, 2])] > tvar[i, 2]] <- "Bad"
+  meta_data$qc_tag_guo[meta_data[, names(tvar[i, 1])] < tvar[i, 1]] <- "Bad"
+}; table(meta_data$qc_tag_guo)
 meta_data$orig.qc_tag <- "ALL"
 
 ## Classification — Greg's
@@ -311,7 +311,7 @@ if(all(class_params %in% colnames(meta_data))){
   meta_data$orig.qc_tag[tvar] <- "Good"
   meta_data = meta_data[, !colnames(meta_data) %in% c('reseq_def')]
   print(table(meta_data$orig.qc_tag))
-  table(meta_data$orig.qc_tag, meta_data$orig.qc_tag_guo)
+  table(meta_data$orig.qc_tag, meta_data$qc_tag_guo)
 }; fname <- paste0('metadata_prefilter.rdata'); save(meta_data, file = fname)
 ### ########### #### ####### ###------------------------------------------------
 
@@ -399,13 +399,17 @@ for(prefix in c("1_qc", "2_filtered")){
   if(prefix == "1_qc"){
     if(opt$verbose) cat('Filtering cells\n')
     print(filtersdf[qc_filters$apply, 1:2])
-    tvar <- paste(
+    all_filters <- paste(
       paste(names(qc_filters[[1]])[qc_filters$apply], ">=", qc_filters$low[qc_filters$apply], collapse = " & "),
       paste(names(qc_filters[[1]])[qc_filters$apply], "<=", qc_filters$high[qc_filters$apply], collapse = " & "),
     sep = " & ")
-    if(!is.null(config$filtering$subset$expr)) tvar <- paste("(", config$filtering$subset$expr, ") & ", tvar)
-    if(opt$verbose) cat("Criteria:", tvar, "\n")
-    sset <- paste0("meta_data <- subset(x = meta_data, subset = ", tvar, ")") # << choose wisely
+    tvar <- grep("expr", names(config$filtering$subset), value = TRUE)
+    if(length(tvar) > 0){
+      tvar <- paste(paste0("(", unlist(config$filtering$subset[tvar]), ")"), collapse = " & ")
+      cat("Specific filters:", tvar, "\n"); all_filters <- paste("(", tvar, ") & ", all_filters)
+    }
+    if(opt$verbose) cat("Criteria:", all_filters, "\n")
+    sset <- paste0("meta_data <- subset(x = meta_data, subset = ", all_filters, ")") # << choose wisely
     if(!all(is.infinite(c(qc_filters$high[qc_filters$apply], qc_filters$low[qc_filters$apply])))){
       if(opt$verbose) cat('- Before:', nrow(meta_databk), '\n')
       eval(expr = parse(text = sset))
@@ -416,7 +420,7 @@ for(prefix in c("1_qc", "2_filtered")){
       meta_databk$orig.qc_tag <- "Good"
       meta_databk[!rownames(meta_databk) %in% rownames(meta_data), ]$orig.qc_tag <- "bad"
     }
-    tvar <- unique(meta_databk$orig.qc_tag); tvar <- tvar[tvar != "Good"]; if(length(tvar) == 0) next
+    tvar <- unique(meta_databk$orig.qc_tag); if(length(tvar) < 2) next
     for(qc_tag in tvar){
       meta_data_ss <- meta_databk[meta_databk$orig.qc_tag == qc_tag, ]
       orignamesp <- if(plate_name %in% colnames(meta_data_ss)) plate_name else "origlib"
