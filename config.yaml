@@ -14,7 +14,7 @@ filtering:
   nFeature_RNA: [200, Inf, 1]
   nCount_RNA: [-Inf, Inf, 1]
   percent.mt: [-Inf, 40, 1]
-  subset: {expr: "!orig.ht_id.global %in% c('Doublet', 'Negative')"}
+  subset: {expr: "!RNA_snn_res.0.1 %in% 'Cluster 8'"} # before QC report
+  expr: "!orig.HT_ID.global %in% c('Doublet', 'Negative')"} # post QC assessment/all filters
   nSamples_expressed: 0.001 # % of cells in which that gene is present
 ...
-# subset: {column1: [value1, value2], column3: group2} is valid too
