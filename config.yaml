@@ -1,11 +1,11 @@
 ---
-project_name: all_fgal
+project_name: project_test
 # path to the Cell Ranger ouput; it can even be a CSV file like the one in a Cell Ranger aggregation
 input_expression: ".data/aggregation.csv"
 # A table of the metadata per library, or the whole metadata ready
 # it can be multiple file
 metadata: ".data/metadata_library.csv"
-output_dir: "/home/ciro/large/fungal_allergy/results/quality_control/"
+output_dir: "/home/ciro/ad_hoc/fungal_allergy/results/quality_control/"
 # A file will sufice: columns must be metrics names in the metadata,
 # first and second rows the lower and upper thresholds, the third whether to use
 # that metric or not
@@ -14,7 +14,7 @@ filtering:
   nFeature_RNA: [200, Inf, 1]
   nCount_RNA: [-Inf, Inf, 1]
   percent.mt: [-Inf, 40, 1]
-  subset: {expr: "!RNA_snn_res.0.1 %in% 'Cluster 8'"} # before QC report
-  expr: "!orig.HT_ID.global %in% c('Doublet', 'Negative')"} # post QC assessment/all filters
+  subset: {expr: "!RNA_snn_res.0.1 %in% 'Cluster 8'"} # before QC report (as a prefilter)
+  expr: "!orig.HT_ID.global %in% c('Doublet', 'Negative')"} # post QC assessment (final filter)
   nSamples_expressed: 0.001 # % of cells in which that gene is present
 ...
