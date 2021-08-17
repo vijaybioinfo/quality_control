@@ -15,6 +15,6 @@ filtering:
   nCount_RNA: [-Inf, Inf, 1]
   percent.mt: [-Inf, 40, 1]
   subset: {expr: "!RNA_snn_res.0.1 %in% 'Cluster 8'"} # before QC report (as a prefilter)
-  expr: "!orig.HT_ID.global %in% c('Doublet', 'Negative')"} # post QC assessment (final filter)
+  expr: "!orig.HT_ID.global %in% c('Doublet', 'Negative')" # post QC assessment (final filter)
   nSamples_expressed: 0.001 # % of cells in which that gene is present
 ...

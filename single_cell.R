@@ -38,35 +38,32 @@ if(suppressMessages(require(crayon))){
 }else{ cyan = red_bold = c }
 
 if(opt$verbose){
-  cat(cyan("\n************ Vijay Lab - LJI\n"))
-  cat(cyan("-------------------------------------\n"))
-  cat(red_bold("------------ Quality Control analysis\n"))
+  cat(cyan("################################################\n"))
+  cat(red_bold("########### Quality Control analysis ###########\n"))
+  cat(cyan("################################################\n"))
 }
 
-#### Directories structure ####-------------------------------------------------
-output_dir <- paste0(sub("\\/$", "", config$output_dir), "/", config$project_name, "/")
+if(opt$verbose) cat(cyan('\n------- Directories structure -----------------\n'))
+output_dir <- paste0(sub("\\/$", "", config$output_dir), "/", config$project, "/")
 if(!grepl("scratch|beegfs", getwd())){
-  cat("No scratch folder involved; careful about temp files...\n")
+  cat("WARNING: No scratch folder involved; careful about temp files.\n")
   dir.create(output_dir, recursive = TRUE); setwd(output_dir)
 }
-cat("Working in:", getwd(), "\n")
-#### ########### ######### ####-------------------------------------------------
-### Log file ####---------------------------------------------------------------
-log_file <- paste0(output_dir, '_qc.log')
+if(opt$verbose) cat(red_bold("Working in:", getwd(), "\n"))
 register_log <- !interactive() && !grepl("scratch|beegfs", getwd()) && opt$log
-# register_log <- (!interactive() && grepl("scratch|beegfs", getwd())) && opt$log
-if(register_log){
-  if(opt$verbose) cat("Check log file:", log_file, "\n")
-  if(!file.exists(log_file)) file.create(log_file)
-  out.file <- file(log_file, open = 'wt')
-  sink(out.file) ; sink(out.file, type = 'message')
-}
-cat('Date and time:\n') ; st.time <- timestamp();
-### ### #### ####---------------------------------------------------------------
+if(isTRUE(register_log)){
+  if(opt$verbose) cat(cyan('\n------- Log file ------------------------------\n'))
+  log_file <- "_log"; if(opt$verbose) cat("File:", log_file, "\n")
+  if(file.exists(log_file)){ # rename previous log file
+    tvar <- paste0(".", log_file, format(Sys.time(), '_%Y_%m_%d_%H_%M_%S'))
+    file.rename(log_file, tvar)
+  }; file.create(log_file); log_file_out <- file(log_file, open = 'wt')
+  sink(log_file_out) ; sink(log_file_out, type = 'message')
+}; if(opt$verbose){ cat('Date and time:\n'); start_time <- timestamp() }
 
-#### Functions ####-------------------------------------------------------------
-cat("Loading functions\n")
-resources = c(
+if(opt$verbose) cat(cyan('\n----------------------- Packages and functions\n'))
+packages_funcs = c(
+  "ggplot2", "cowplot",
   "/home/ciro/scripts/handy_functions/devel/utilities.R",
   # dircheck show_parameters newlines
   "/home/ciro/scripts/handy_functions/devel/file_reading.R",
@@ -75,79 +72,62 @@ resources = c(
   "/home/ciro/scripts/handy_functions/devel/filters.R",
   # filters_complex
   "/home/ciro/scripts/clustering/R/plotting.R", # qc_scatters qc_violin simple_violin
-  "/home/ciro/scripts/handy_functions/devel/plots.R"
-  # make_grid
+  "/home/ciro/scripts/handy_functions/devel/plots.R" # make_grid
 )
-for(i in resources){ source(i) }
-#### ######### ####-------------------------------------------------------------
+loaded <- lapply(X = packages_funcs, FUN = function(x){
+    cat("*", x, "\n")
+    if(!file.exists(x)){
+      suppressMessages(require(package = x, quietly = TRUE, character.only = TRUE))
+    }else{ source(x) }
+}); theme_set(theme_cowplot())
 
-#### Loading dependencies ####--------------------------------------------------
-packages <- c("ggplot2", "cowplot")
-loaded <- lapply(X = packages, FUN = function(x){
-  if(opt$verbose) cat("*", x, "\n")
-  suppressMessages(require(package = x, quietly = TRUE, character.only = TRUE))
-})
-theme_set(theme_cowplot())
-#### ####### ############ ####--------------------------------------------------
-
-#### Presenting Parameters ####-------------------------------------------------
-str(opt); str(config)
-if(opt$verbose) cat(cyan("----------- Digesting parameters -----------------\n"))
-qc_filters <- filters_qc_limits(config$filtering)
-if(is.null(config$ident_vars)) config$ident_vars = "orig~"
-parameters2set = c("filtering$nSamples_expressed" = "0.001")
+if(opt$verbose) cat(cyan('\n------- Digesting parameters ------------------\n'))
+parameters2set = c("filtering$nSamples_expressed" = "0.001", ident_vars = "'orig~'")
 for(i in 1:length(parameters2set)){
   param = paste0("config$", names(parameters2set)[i])
   command = paste0(param, " = ", parameters2set[[i]])
   if(is.null(eval(parse(text = param)))){
     if(opt$verbose) cat(" ", command, "\n"); eval(parse(text = command))
   }
-}
-#### ########## ########## ####-------------------------------------------------
+}; qc_filters <- filters_qc_limits(config$filtering)
+if(opt$verbose){ str(opt); str(config); str(qc_filters) }
 
-#### Getting data ####----------------------------------------------------------
-if(opt$verbose) cat(cyan('----------- Loading data -------------------------\n'))
-Sys.time()
-# Find 10X directory (barcodes, gene_names, counts), Seurat object, CSV file, TXT, RDS
-expr_data <- get_source_data(
+if(opt$verbose) cat(cyan('\n------- Loading data --------------------------\n'))
+merged = grepl("meco|merge", config$project_name)
+Sys.time(); expr_data <- get_source_data(
   xpath = config$input_expression,
   pj = config$project_name,
   metadata = config$metadata[1],
-  merge_counts = grepl("meco|merge", config$project_name) || !dir.exists(config$input_expression),
+  merge_counts = merged && dir.exists(config$input_expression),
   verbose = opt$verbose
-)
-Sys.time()
+); Sys.time()
 config$input_expression <- expr_data$source
+meta_data <- expr_data$mdata; expr_data <- expr_data$edata
+## Find extra metadata
 addmetadataf <- if(length(config$metadata[-1]) > 0) config$metadata[-1] else "no_file"
-meta_data <- remove.factors(expr_data$mdata)
-expr_data <- expr_data$edata
-
 addmetadataf <- unlist(strsplit(path.expand(addmetadataf), "~"))
 tvar <- file.exists(addmetadataf)
 if(any(tvar)){
   addmetadataf <- addmetadataf[tvar]
   if(opt$verbose) cat("Adding metadata from:", addmetadataf, sep = "\n")
   for(addmetadataf_i in addmetadataf){
-    addannot <- remove.factors(readfile(addmetadataf_i))
-    print(dim(meta_data))
+    addannot <- readfile(addmetadataf_i); if(opt$verbose) print(dim(meta_data))
     # partial matching problem addressed in /home/ciro/covid19/scripts/partial_matching.R
     meta_data <- joindf(x = meta_data, y = addannot)
-  }
-  print(dim(meta_data))
-}; str(meta_data)
-meta_data = ident_tag(
-  mdata = meta_data,
-  tag = config$ident_vars[1],
-  pattern = config$ident_vars[2],
-  exclude = "^RNA",
-  verbose = opt$verbose
-)
-config$ident_vars[1] = gsub("~", ".", config$ident_vars[1])
+  }; if(opt$verbose) print(dim(meta_data))
+}; if(opt$verbose) str(meta_data)
+if(!is.null(config$ident_vars)){
+  meta_data = ident_tag(
+    mdata = meta_data,
+    tag = config$ident_vars[1],
+    pattern = config$ident_vars[2],
+    exclude = "^RNA",
+    verbose = opt$verbose
+  )
+  config$ident_vars[1] = gsub("~", ".", config$ident_vars[1])
+}
 
-fname <- paste0('metadata.rdata'); save(meta_data, file = fname)
-#### ####### #### ####----------------------------------------------------------
-
-if(opt$verbose) cat('----------------------- Initial filters -------------------------\n')
+if(opt$verbose) cat(cyan('\n------- Initial filters --------------------------\n'))
 str(meta_data)
 filters_init = if(!is.null(config$filtering$subset)){
   lapply(names(config$filtering$subset), function(x) c(x, config$filtering$subset[[x]]) )
@@ -227,20 +207,22 @@ meta_data$nCount_RNA <- Matrix::colSums(expr_data[, rownames(meta_data)])
 meta_data$Data = casefold(x = config$project_name, upper = TRUE)
 #### ###### ######### ## ######## ####------------------------------------------
 if(opt$verbose){
-  cat("Presenting data:\nAnnotation:\n"); str(meta_data)
+  cat(cyan('\n------- Presenting data -----------------------\n'))
+  cat("Annotation:\n"); str(meta_data)
   cat("Matrix:"); str(expr_data)
-  cat("Aprox. expression range"); print(summary(as.matrix(expr_data[, sample(1:ncol(expr_data), 4)])))
-}; fname <- paste0('metadata_prefilter.rdata'); save(meta_data, file = fname)
+  tvar <- sample(1:ncol(expr_data), min(c(col(expr_data), 50)))
+  cat("Aprox. expression range"); print(summary(as.matrix(expr_data[, tvar])))
+}; saveRDS(meta_data, file = "metadata_prefilter.rds")
 
 #### Filtering variables ####---------------------------------------------------
 if(opt$verbose) cat('\n\nDistribution of filtering criteria\n')
 qc_filters = lapply(qc_filters, function(i) i[names(i) %in% colnames(meta_data)] )
-meta_data[, names(qc_filters[[1]])] <- apply(meta_data[, names(qc_filters[[1]]), drop = FALSE], 2, function(x){
+meta_data[, names(qc_filters[[1]])] <- apply(
+  X = meta_data[, names(qc_filters[[1]]), drop = FALSE], 2, function(x){
   y <- x; y[is.na(y)] <- Inf; return(y); #any(is.na(x))
 })
 summ <- sapply(meta_data[, names(qc_filters[[1]]), drop = FALSE], function(x){
-  c(rev(summary(x)),
-    quantile(x[!is.na(x)], prob = c(.001, 0.1, 0.9, 0.992)))
+  c(rev(summary(x)), quantile(x[!is.na(x)], prob = c(.001, 0.1, 0.9, 0.992)))
 })
 tvar <- t(data.frame(row.names = names(qc_filters[[1]]), qc_filters$low, qc_filters$high))
 tvar <- ifelse(is.infinite(tvar), summ[c('Min.', 'Max.'), ], tvar)
@@ -330,7 +312,7 @@ if(all(class_params %in% colnames(meta_data))){
   meta_data = meta_data[, !colnames(meta_data) %in% c('reseq_def')]
   print(table(meta_data$orig.qc_tag))
   table(meta_data$orig.qc_tag, meta_data$qc_tag_guo)
-}; fname <- paste0('metadata_prefilter.rdata'); save(meta_data, file = fname)
+}; saveRDS(meta_data, file = "metadata_prefilter.rds")
 ### ########### #### ####### ###------------------------------------------------
 
 # #### Qlucore file ####----------------------------------------------------------
@@ -384,7 +366,7 @@ vlns <- lapply(names(qc_filters[[1]]), function(x){
     lb_filt = qc_filters$low, hb_filt = qc_filters$high, filtby = qc_filters$apply)
 })
 is_simple <- length(table(meta_data$orig.qc_tag)) < 3 & length(vlns) < 4
-mygrid <- make_grid(length(names(qc_filters[[1]])), ncol = if(is_simple) 3)
+mygrid <- make_grid(length(names(qc_filters[[1]])), if(is_simple) 3)
 pdf(paste0('0_qc_all_qc_tag.pdf'), width = 5.5 * mygrid[2], height = 5 * mygrid[1])
 print(cowplot::plot_grid(plotlist = vlns, ncol = mygrid[2]))
 graphics.off()
@@ -396,7 +378,7 @@ for(prefix in c("1_qc_all", "2_filtered")){
       lb_filt = qc_filters$low, hb_filt = qc_filters$high, filtby = qc_filters$apply)
   })
   is_simple <- length(table(meta_data$orig.qc_tag)) < 3 & length(vlns) < 4
-  mygrid <- make_grid(length(names(qc_filters[[1]])), ncol = if(is_simple) 3)
+  mygrid <- make_grid(length(names(qc_filters[[1]])), if(is_simple) 3)
   tvar <- ifelse(is_simple, 7, 5) * mygrid[1]
   pdf(paste0(prefix, '_data.pdf'), width = 5.5 * mygrid[2], height = tvar)
   print(cowplot::plot_grid(plotlist = vlns, ncol = mygrid[2]))
@@ -485,7 +467,7 @@ for(prefix in c("1_qc_all", "2_filtered")){
 qc_scatters(dat = meta_data, thresholds = summ[, qc_filters$apply], prefix = "3_qc")
 # ############# ####------------------------------------------------------------
 
-save(meta_data, file = "metadata_filtered.rdata")
+saveRDS(meta_data, file = "metadata_filtered.rds")
 # write.table(
 #   rownames(expr_data), file = "feature_names.txt",
 #   quote = FALSE, row.names = FALSE, col.names = FALSE);
@@ -493,7 +475,7 @@ save(meta_data, file = "metadata_filtered.rdata")
 
 if(opt$verbose){
   cat('\n\n*******************************************************************\n')
-  cat('Starting time:\n'); cat(st.time, '\n')
+  cat('Starting time:\n'); cat(start_time, '\n')
   cat('Finishing time:\n'); timestamp()
   cat('*******************************************************************\n')
   cat('SESSION INFO:\n'); print(sessionInfo()); cat("\n")
