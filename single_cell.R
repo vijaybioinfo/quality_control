@@ -173,17 +173,6 @@ cellsf <- show_found(colnames(expr_data), rownames(meta_data), v = opt$verbose)
 meta_data <- meta_data[cellsf, , drop = FALSE]
 expr_data <- expr_data[, cellsf]
 
-# # This changes the clustering names and makes it harder to subset
-# if("orig.ident" %in% colnames(meta_data)){
-#   # if the meta data comes from a Seurat object, check if it has cluster columns
-#   # previous project name and its clusters are renamed
-#   if(opt$verbose) cat("Preserve previous analyses clusters\n")
-#   for(orig in grep('^res|.*_snn_res', colnames(meta_data), value = TRUE)){
-#     meta_data[, orig] <- paste0(meta_data[, "orig.ident"], "_", meta_data[, orig])
-#   }
-# }
-# This line changes column names' case... it probably shouldn't!
-# sub('^res.|.*_snn_res.', config$ident_vars[1], )
 colnames(meta_data) <- make.names(names = colnames(meta_data), unique = TRUE)
 tvar <- grep(pattern = "orig.ident|seurat_clusters", x = colnames(meta_data), value = TRUE, invert = TRUE)
 if(opt$verbose) cat("Keeping", length(tvar), "of", ncol(meta_data), "columns\n")
@@ -314,45 +303,6 @@ if(all(class_params %in% colnames(meta_data))){
   table(meta_data$orig.qc_tag, meta_data$qc_tag_guo)
 }; saveRDS(meta_data, file = "metadata_prefilter.rds")
 ### ########### #### ####### ###------------------------------------------------
-
-# #### Qlucore file ####----------------------------------------------------------
-# if(opt$verbose) cat("\n\n----- Qlucore input -------\n")
-# passed <- if(is.null(meta_data$orig.qc_tag)){
-#   rownames(meta_data)
-# }else{
-#   if(opt$verbose) cat("Using only the 'good' ones.\n")
-#   rownames(meta_data[meta_data$orig.qc_tag == "Good", ])
-# }
-# tvar <- gsub("raw\\.", "TPM\\.", config$input_expression)
-# tvar <- if(!file.exists(tvar)) gsub("_raw", "_TPM", config$input_expression) else tvar
-# suffixtag = "_counts"
-# expr_data_t <- if(file.exists(tvar) && grepl("raw|TPM", tvar, ignore.case = TRUE)){
-#   suffixtag = "_TPM" # DATA DUPLICATION
-#   expr_data_t <- readfile(tvar)
-# }else{ expr_data }
-# source("/home/ciro/scripts/handy_functions/R/qlucore_file.R")
-# for(thresh in c(0, 5)){
-#   gmeans <- sort(Matrix::rowMeans(expr_data_t[, passed]), decreasing = TRUE)
-#   genes <- rownames(expr_data_t[names(gmeans[gmeans > thresh]), ])
-#   if(opt$verbose) cat(length(genes), "of", nrow(expr_data_t), 'features\n')
-#   mysamples <- sample_grp(annot = meta_data, cname = 'Data', maxln = '5000')
-#   if(opt$verbose) cat(length(mysamples), "of", ncol(expr_data_t), 'samples\n')
-#   suffix <- paste0("qlucore", if(is.numeric(thresh)){
-#     paste0("_gt", thresh, "mean_")
-#   }else{ paste0("_", thresh, "_")) }
-#   suffix <- paste0(suffix, length(genes), "genes", nrow(meta_data), "samples")
-#   suffix <- paste0(suffix, suffixtag, ".txt")
-#   nameout <- paste0(suffix)
-#   if(opt$verbose) cat("Qlucore file:", nameout, "\n")
-#   if(!file.exists(nameout)){
-#     qf <- qlucore_format(
-#       mat = expr_data_t, metadata = meta_data, rnames = genes, cnames = , v = TRUE)
-#     write.table(qf, file = nameout, sep = "\t", quote = FALSE, row.names = FALSE)
-#   }else{
-#     if(opt$verbose) cat("Exists\n")
-#   }
-# }; if(opt$verbose) cat(list.files(path = "./", pattern = "qlucore"), sep = "\n")
-# #### ####### #### ####----------------------------------------------------------
 
 if(opt$verbose)
   cat('----------------------- Plots and final filters -----------------\n')
