@@ -7,26 +7,24 @@
 # This script contains the QC steps for single-cell analysis and gets data
 # ready for downstream protocols; clustering, scDGEA, etc.
 
-library(optparse)
-
 optlist <- list(
-  make_option(
+  optparse::make_option(
     opt_str = c("-y", "--yaml"), type = "character",
     help = "Configuration file: Instructions in YAML format."
   ),
-  make_option(
+  optparse::make_option(
     opt_str = c("-l", "--log"), default = TRUE,
     help = "Log file: Create a log file rather to stdout."
   ),
-  make_option(
+  optparse::make_option(
     opt_str = c("-v", "--verbose"), default = TRUE,
     help = "Verbose: Show progress."
   )
 )
 
 # Getting arguments from command line and setting their values to their respective variable names.
-optparse <- OptionParser(option_list = optlist)
-opt <- parse_args(optparse)
+opt <- parse_args(optparse::OptionParser(option_list = optlist))
+
 if(interactive()){ # Example/manually
   opt$yaml = "/home/ciro/amica/scripts/SiEs12_qc.yaml"
 }
