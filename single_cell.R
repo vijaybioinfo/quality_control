@@ -4,7 +4,6 @@
 # Quality Control of single-cell data #
 #######################################
 
-#Escito prueba
 # This script contains the QC steps for single-cell analysis and gets data
 # ready for downstream protocols; clustering, scDGEA, etc.
 
