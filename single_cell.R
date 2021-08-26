@@ -23,7 +23,7 @@ optlist <- list(
 )
 
 # Getting arguments from command line and setting their values to their respective variable names.
-opt <- parse_args(optparse::OptionParser(option_list = optlist))
+opt <- optparse::parse_args(optparse::OptionParser(option_list = optlist))
 
 if(interactive()){ # Example/manually
   opt$yaml = "/home/ciro/amica/scripts/SiEs12_qc.yaml"
