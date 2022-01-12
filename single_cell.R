@@ -74,7 +74,7 @@ packages_funcs = c(
 )
 loaded <- lapply(X = packages_funcs, FUN = function(x){
     cat("*", x, "\n")
-    if(!file.exists(x) && grepl("http")){
+    if(!file.exists(x) && grepl(pattern = "http", x = x)){
       suppressMessages(require(package = x, quietly = TRUE, character.only = TRUE))
     }else{ source(x) }
 }); theme_set(theme_cowplot())
