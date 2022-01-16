@@ -197,8 +197,10 @@ if(opt$verbose){
   cat(cyan('\n------- Presenting data -----------------------\n'))
   cat("Annotation:\n"); str(meta_data)
   cat("Matrix:"); str(expr_data)
-  tvar <- sample(1:ncol(expr_data), min(c(col(expr_data), 50)))
-  cat("Aprox. expression range"); print(summary(as.matrix(expr_data[, tvar])))
+  if(ncol(expr_data) < 90e3){
+    tvar <- sample(1:ncol(expr_data), min(c(col(expr_data), 50)))
+    cat("Aprox. expression range"); print(summary(as.matrix(expr_data[, tvar])))
+  }
 }; saveRDS(meta_data, file = "metadata_prefilter.rds")
 
 #### Filtering variables ####---------------------------------------------------
@@ -364,7 +366,7 @@ for(prefix in c("1_qc_all", "2_filtered")){
     sep = " & ")
     if(opt$verbose) cat("Criteria:", all_filters, "\n")
     expr = grep(pattern = "^expr|addit", x = names(config$filtering), value = TRUE)
-    if(length(config$filtering[[expr]]) > 0){
+    if(length(expr) > 0){
       tvar <- unlist(config$filtering[[expr]]);
       cat("Specific filters:", tvar, sep = "\n");
       tvar <- paste(paste0("(", tvar, ")", collapse = " & "))
@@ -373,7 +375,7 @@ for(prefix in c("1_qc_all", "2_filtered")){
     # !!!!!!!!!!!! choose wisely !!!!!!!!!!!!
     sset <- paste0("meta_data <- subset(x = meta_data, subset = ", all_filters, ")")
     tvar <- c(qc_filters$high[qc_filters$apply], qc_filters$low[qc_filters$apply])
-    if(!all(is.infinite(tvar)) || length(config$filtering[[expr]]) > 0){
+    if(!all(is.infinite(tvar)) || length(expr) > 0){
       if(opt$verbose) cat('- Before:', nrow(meta_databk), '\n')
       eval(expr = parse(text = sset))
       if(opt$verbose) cat('- After:', nrow(meta_data), '\n')
